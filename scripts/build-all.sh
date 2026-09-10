@@ -14,6 +14,7 @@ STAGES=(
   20-llvm-wasm
   30-swift-frontend-wasm
   40-sysroot-pack
+  55-check-alignment-contracts
 )
 
 # Optionally stop early, e.g. BUILD_UNTIL=20-llvm-wasm ./scripts/build-all.sh

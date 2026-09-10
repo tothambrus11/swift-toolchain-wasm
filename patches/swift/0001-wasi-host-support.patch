@@ -18,6 +18,71 @@ index f5596388..d0ec7701 100644
      endif()
      set("${module}_dep_target" ${dep_target})
      set(all_module_targets ${all_module_targets} ${dep_target})
+diff --git a/include/swift/AST/Identifier.h b/include/swift/AST/Identifier.h
+index db0b0afc..0e3cd7bf 100644
+--- a/include/swift/AST/Identifier.h
++++ b/include/swift/AST/Identifier.h
+@@ -506,7 +506,15 @@ class DeclName {
+   friend class ASTContext;
+ 
+   /// Represents a compound declaration name.
+-  struct alignas(Identifier) CompoundDeclName final : llvm::FoldingSetNode,
++  ///
++  /// The alignment is Identifier::RequiredAlignment, not alignof(Identifier):
++  /// PointerLikeTypeTraits<DeclName> promises
++  /// PointerLikeTypeTraits<DeclBaseName>::NumLowBitsAvailable - 1 == 2 spare low bits
++  /// on top of the union's own tag bit, so this needs three bits — eight-byte
++  /// alignment. alignof(Identifier) is the alignment of a `const char *`, which is
++  /// eight only on a 64-bit host; on a 32-bit one it is four, and the promise breaks.
++  struct alignas(Identifier::RequiredAlignment) CompoundDeclName final
++      : llvm::FoldingSetNode,
+       private llvm::TrailingObjects<CompoundDeclName, Identifier> {
+     friend TrailingObjects;
+     friend class DeclName;
+@@ -742,7 +750,10 @@ class DeclNameRef {
+   friend struct llvm::PointerLikeTypeTraits<DeclNameRef>;
+ 
+   /// Contains the name and module for a DeclNameRef with a module selector.
+-  struct alignas(Identifier) SelectiveDeclNameRef : llvm::FoldingSetNode {
++  // Same reasoning as CompoundDeclName above: the promised spare bits need eight-byte
++  // alignment, which alignof(Identifier) only supplies on a 64-bit host.
++  struct alignas(Identifier::RequiredAlignment) SelectiveDeclNameRef
++      : llvm::FoldingSetNode {
+     Identifier moduleSelector;   // Note: currently can never be empty().
+     DeclName fullName;
+ 
+diff --git a/lib/AST/ASTMangler.cpp b/lib/AST/ASTMangler.cpp
+index e8794a2b..b7f97d1a 100644
+--- a/lib/AST/ASTMangler.cpp
++++ b/lib/AST/ASTMangler.cpp
+@@ -2192,6 +2192,7 @@ void ASTMangler::appendRetroactiveConformances(SubstitutionMap subMap,
+     if (conformance.isInvalid())
+       continue;
+ 
++
+     if (conformance.getProtocol()->isMarkerProtocol())
+       continue;
+ 
+diff --git a/lib/AST/AbstractConformance.h b/lib/AST/AbstractConformance.h
+index e305d7c0..42828b6c 100644
+--- a/lib/AST/AbstractConformance.h
++++ b/lib/AST/AbstractConformance.h
+@@ -22,7 +22,14 @@
+ #include "llvm/ADT/FoldingSet.h"
+ 
+ namespace swift {
+-class AbstractConformance final : public llvm::FoldingSetNode {
++/// PointerLikeTypeTraits<AbstractConformance *> promises TypeAlignInBits (3) spare low
++/// bits, and this type is allocated with alignof(AbstractConformance). Those agree only
++/// by accident on a 64-bit host, where two pointers and a FoldingSetNode give natural
++/// alignment 8. On a 32-bit host — wasm32 among them — natural alignment is 4, so the
++/// promise is broken and anything packing three bits into such a pointer corrupts it.
++/// State the alignment the traits already claim.
++class alignas(1 << TypeAlignInBits) AbstractConformance final
++    : public llvm::FoldingSetNode {
+   Type conformingType;
+   ProtocolDecl *requirement;
+ 
 diff --git a/lib/AST/PluginRegistry.cpp b/lib/AST/PluginRegistry.cpp
 index 9495d91c..d526957f 100644
 --- a/lib/AST/PluginRegistry.cpp
