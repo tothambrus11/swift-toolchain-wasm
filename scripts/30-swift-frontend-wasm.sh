@@ -94,9 +94,10 @@ cmake -G Ninja -S "${SWIFT_SRC}" -B "$SWIFT_BUILD" \
   -DSWIFT_BUILD_SWIFT_SYNTAX=OFF \
   -DSWIFT_ENABLE_SWIFT_IN_SWIFT=OFF \
   -DBOOTSTRAPPING_MODE=OFF \
+  -DSWIFT_USE_LINKER="" \
   -DSWIFT_NATIVE_CLANG_TOOLS_PATH="${NATIVE_SWIFT_BIN}" \
   -DCMAKE_CXX_FLAGS="${WASI_EMULATION_DEFINES} -fno-exceptions" \
-  -DCMAKE_EXE_LINKER_FLAGS="${WASI_EMULATION_LIBS} -Wl,-z,stack-size=${STACK_SIZE}"
+  -DCMAKE_EXE_LINKER_FLAGS="${WASI_EMULATION_LIBS} -Wl,-z,stack-size=${STACK_SIZE} -Wl,--stack-first"
 
 log "building swift-frontend"
 ninja -C "$SWIFT_BUILD" -j "$JOBS" swift-frontend

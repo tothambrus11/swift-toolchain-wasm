@@ -313,3 +313,88 @@ index ce609060..56b588da 100644
  
  public:
    StackAddress() : ExtraInfoAndKind(nullptr, StaticAlloca) {}
+diff --git a/lib/IRGen/IRGen.cpp b/lib/IRGen/IRGen.cpp
+index 96d8d608..49714140 100644
+--- a/lib/IRGen/IRGen.cpp
++++ b/lib/IRGen/IRGen.cpp
+@@ -1570,9 +1570,15 @@ GeneratedModule IRGenRequest::evaluate(Evaluator &evaluator,
+   auto SILModuleRelease = [&SILMod]() {
+     SILMod.reset(nullptr);
+   };
++#if defined(__wasi__)
++  // WASI cannot create threads. Releasing the SILModule inline costs the overlap with
++  // bitcode embedding, not the work itself.
++  SILModuleRelease();
++#else
+   auto Thread = std::thread(SILModuleRelease);
+   // Wait for the thread to terminate.
+   SWIFT_DEFER { Thread.join(); };
++#endif
+ 
+   embedBitcode(IGM.getModule(), Opts);
+ 
+@@ -1931,6 +1937,13 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
+   auto SILModuleRelease = [&SILMod]() {
+     SILMod.reset(nullptr);
+   };
++#if defined(__wasi__)
++  // As above: no threads on WASI, so release inline before running codegen.
++  SILModuleRelease();
++
++  codeGenThreads.runMainThread();
++  codeGenThreads.join();
++#else
+   auto releaseModuleThread = std::thread(SILModuleRelease);
+ 
+   codeGenThreads.runMainThread();
+@@ -1938,6 +1951,7 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
+   // Wait for all threads.
+   releaseModuleThread.join();
+   codeGenThreads.join();
++#endif
+ }
+ 
+ GeneratedModule swift::performIRGeneration(
+diff --git a/lib/SILOptimizer/Utils/StackNesting.cpp b/lib/SILOptimizer/Utils/StackNesting.cpp
+index 4589f518..647c7c91 100644
+--- a/lib/SILOptimizer/Utils/StackNesting.cpp
++++ b/lib/SILOptimizer/Utils/StackNesting.cpp
+@@ -285,8 +285,37 @@ static StringRef getNameForStatus(AllocationStatus status) {
+   llvm_unreachable("bad kind");
+ }
+ 
++#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ < 8
++/// AllocationStatus needs three bits, and a 32-bit host (wasm32 among them) leaves
++/// only two spare low bits in a `SILInstruction *`. Keep the interface and drop the
++/// packing there.
++class PointerAndAllocationStatus {
++  SILInstruction *Pointer;
++  AllocationStatus Status;
++
++public:
++  PointerAndAllocationStatus(SILInstruction *Pointer, AllocationStatus Status)
++    : Pointer(Pointer), Status(Status) {}
++
++  SILInstruction *getPointer() const { return Pointer; }
++  AllocationStatus getInt() const { return Status; }
++  void setInt(AllocationStatus NewStatus) { Status = NewStatus; }
++
++  bool operator==(const PointerAndAllocationStatus &RHS) const {
++    return Pointer == RHS.Pointer && Status == RHS.Status;
++  }
++  // C++17 does not synthesise != from ==, and callers use both.
++  bool operator!=(const PointerAndAllocationStatus &RHS) const {
++    return !(*this == RHS);
++  }
++};
++#else
++using PointerAndAllocationStatus =
++    llvm::PointerIntPair<SILInstruction *, 3, AllocationStatus>;
++#endif
++
+ class ActiveAllocation {
+-  llvm::PointerIntPair<SILInstruction*, 3, AllocationStatus> valueAndStatus;
++  PointerAndAllocationStatus valueAndStatus;
+ 
+ public:
+   explicit ActiveAllocation(SILInstruction *value)

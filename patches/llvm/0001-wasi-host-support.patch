@@ -93,6 +93,21 @@ index 297d3e9b0..a93026510 100644
  #define LLVM_ABI __attribute__((visibility("default")))
  #define LLVM_TEMPLATE_ABI
  #define LLVM_EXPORT_TEMPLATE
+diff --git a/llvm/lib/CAS/OnDiskCommon.cpp b/llvm/lib/CAS/OnDiskCommon.cpp
+index 885f8d24e..2c31a64c2 100644
+--- a/llvm/lib/CAS/OnDiskCommon.cpp
++++ b/llvm/lib/CAS/OnDiskCommon.cpp
+@@ -18,7 +18,9 @@
+ 
+ #if __has_include(<sys/file.h>)
+ #include <sys/file.h>
+-#ifdef LOCK_SH
++// wasi-libc declares the LOCK_* constants but provides no flock(), so the presence of
++// LOCK_SH is not evidence the function exists — it links to an undefined symbol.
++#if defined(LOCK_SH) && !defined(__wasi__)
+ #define HAVE_FLOCK 1
+ #else
+ #define HAVE_FLOCK 0
 diff --git a/llvm/lib/Support/CrashRecoveryContext.cpp b/llvm/lib/Support/CrashRecoveryContext.cpp
 index fc30d4215..138d07618 100644
 --- a/llvm/lib/Support/CrashRecoveryContext.cpp
