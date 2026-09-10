@@ -1,0 +1,150 @@
+diff --git a/SwiftCompilerSources/CMakeLists.txt b/SwiftCompilerSources/CMakeLists.txt
+index f5596388..d0ec7701 100644
+--- a/SwiftCompilerSources/CMakeLists.txt
++++ b/SwiftCompilerSources/CMakeLists.txt
+@@ -295,7 +295,14 @@ function(add_swift_compiler_modules_library name)
+       COMMENT "Building swift module ${module}")
+ 
+     if(BOOTSTRAPPING_MODE STREQUAL "CROSSCOMPILE")
+-      add_dependencies(${dep_target} swift-stdlib-${SWIFT_SDK_${SWIFT_HOST_VARIANT_SDK}_LIB_SUBDIR}-${SWIFT_HOST_VARIANT_ARCH})
++      # When cross-compiling, the host stdlib may come prebuilt from an SDK rather than
++      # being built in this tree (SWIFT_BUILD_STDLIB=OFF), in which case there is no
++      # target to depend on.
++      set(_host_stdlib_target
++        swift-stdlib-${SWIFT_SDK_${SWIFT_HOST_VARIANT_SDK}_LIB_SUBDIR}-${SWIFT_HOST_VARIANT_ARCH})
++      if(TARGET ${_host_stdlib_target})
++        add_dependencies(${dep_target} ${_host_stdlib_target})
++      endif()
+     endif()
+     set("${module}_dep_target" ${dep_target})
+     set(all_module_targets ${all_module_targets} ${dep_target})
+diff --git a/lib/Basic/CMakeLists.txt b/lib/Basic/CMakeLists.txt
+index b75e0c83..7849785b 100644
+--- a/lib/Basic/CMakeLists.txt
++++ b/lib/Basic/CMakeLists.txt
+@@ -6,6 +6,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+   set(UUID_INCLUDE "")
+   set(UUID_LIBRARIES "rpcrt4.lib")
++elseif(CMAKE_SYSTEM_NAME STREQUAL "WASI")
++  # There is no libuuid for wasm; UUID.cpp implements the operations directly.
++  # Searching for one finds the *host* library, whose headers then shadow the
++  # wasi sysroot's and break every translation unit that includes <cassert>.
++  set(UUID_INCLUDE "")
++  set(UUID_LIBRARIES "")
+ else()
+   find_package(UUID REQUIRED)
+   set(UUID_INCLUDE "${UUID_INCLUDE_DIRS}")
+diff --git a/lib/Basic/UUID.cpp b/lib/Basic/UUID.cpp
+index 7aa78e83..f551363c 100644
+--- a/lib/Basic/UUID.cpp
++++ b/lib/Basic/UUID.cpp
+@@ -27,6 +27,30 @@
+ #include <objbase.h>
+ #include <string>
+ #include <algorithm>
++#elif defined(__wasi__)
++// WASI has no libuuid. The operations are small enough to implement directly: 16
++// random bytes from getentropy(), the RFC 4122 version and variant bits, and hex
++// formatting. wasm has no MAC address and no stable clock sequence, so time-based
++// UUIDs are generated randomly here too — they remain unique, just not sortable.
++#include <cstdio>
++#include <cstring>
++#include <unistd.h>
++
++namespace {
++void wasiRandomUUID(unsigned char (&value)[swift::UUID::Size]) {
++  if (getentropy(value, swift::UUID::Size) != 0)
++    memset(value, 0, swift::UUID::Size);
++  value[6] = (value[6] & 0x0F) | 0x40; // version 4
++  value[8] = (value[8] & 0x3F) | 0x80; // RFC 4122 variant
++}
++
++int wasiHexDigit(char c) {
++  if (c >= '0' && c <= '9') return c - '0';
++  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++  return -1;
++}
++} // end anonymous namespace
+ #else
+ #include <uuid/uuid.h>
+ #endif
+@@ -39,6 +63,8 @@ swift::UUID::UUID(FromRandom_t) {
+   ::CoCreateGuid(&uuid);
+ 
+   memcpy(Value, &uuid, Size);
++#elif defined(__wasi__)
++  wasiRandomUUID(Value);
+ #else
+   uuid_generate_random(Value);
+ #endif
+@@ -50,6 +76,8 @@ swift::UUID::UUID(FromTime_t) {
+   ::CoCreateGuid(&uuid);
+ 
+   memcpy(Value, &uuid, Size);
++#elif defined(__wasi__)
++  wasiRandomUUID(Value);
+ #else
+   uuid_generate_time(Value);
+ #endif
+@@ -61,6 +89,8 @@ swift::UUID::UUID() {
+   UuidCreateNil(&uuid);
+ 
+   memcpy(Value, &uuid, Size);
++#elif defined(__wasi__)
++  memset(Value, 0, Size);
+ #else
+   uuid_clear(Value);
+ #endif
+@@ -79,6 +109,28 @@ std::optional<swift::UUID> swift::UUID::fromString(const char *s) {
+   swift::UUID result = UUID();
+   memcpy(result.Value, &uuid, Size);
+   return result;
++#elif defined(__wasi__)
++  // 8-4-4-4-12 hex digits with dashes, exactly 36 characters.
++  static const int groups[] = {4, 2, 2, 2, 6};
++  swift::UUID result;
++  unsigned byte = 0;
++  const char *p = s;
++  for (unsigned group = 0; group != 5; ++group) {
++    if (group != 0) {
++      if (*p++ != '-')
++        return std::nullopt;
++    }
++    for (int i = 0; i != groups[group]; ++i) {
++      int hi = wasiHexDigit(*p++);
++      int lo = wasiHexDigit(*p++);
++      if (hi < 0 || lo < 0)
++        return std::nullopt;
++      result.Value[byte++] = (unsigned char)((hi << 4) | lo);
++    }
++  }
++  if (*p != '\0')
++    return std::nullopt;
++  return result;
+ #else
+   swift::UUID result;
+   if (uuid_parse(s, result.Value))
+@@ -99,6 +151,12 @@ void swift::UUID::toString(llvm::SmallVectorImpl<char> &out) const {
+   char* signedStr = reinterpret_cast<char*>(str);
+   memcpy(out.data(), signedStr, StringBufferSize);
+   llvm::transform(out, std::begin(out), toupper);
++#elif defined(__wasi__)
++  snprintf(out.data(), StringBufferSize,
++           "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
++           Value[0], Value[1], Value[2], Value[3], Value[4], Value[5], Value[6],
++           Value[7], Value[8], Value[9], Value[10], Value[11], Value[12],
++           Value[13], Value[14], Value[15]);
+ #else
+   uuid_unparse_upper(Value, out.data());
+ #endif
+@@ -117,6 +175,8 @@ int swift::UUID::compare(UUID y) const {
+   memcpy(&uuid2, y.Value, Size);
+ 
+   return UuidCompare(&uuid1, &uuid2, &s);
++#elif defined(__wasi__)
++  return memcmp(Value, y.Value, Size);
+ #else
+   return uuid_compare(Value, y.Value);
+ #endif

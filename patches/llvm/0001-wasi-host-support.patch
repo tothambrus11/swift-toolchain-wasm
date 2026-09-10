@@ -1,0 +1,402 @@
+diff --git a/clang/include/clang/Support/Compiler.h b/clang/include/clang/Support/Compiler.h
+index e1ae3eda4..e23807ff6 100644
+--- a/clang/include/clang/Support/Compiler.h
++++ b/clang/include/clang/Support/Compiler.h
+@@ -54,7 +54,11 @@
+ #define CLANG_ABI LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
+ #define CLANG_TEMPLATE_ABI LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
+ #define CLANG_EXPORT_TEMPLATE
+-#elif defined(__MACH__) || defined(__WASM__) || defined(__EMSCRIPTEN__)
++// __WASM__ is not defined by any compiler; clang spells it __wasm__. Without this,
++// wasm targets match no branch above (wasm is not ELF) and the ABI macros are left
++// undefined, so every consumer of these headers fails to parse the TableGen output.
++#elif defined(__MACH__) || defined(__WASM__) || defined(__wasm__) ||           \
++    defined(__EMSCRIPTEN__)
+ #define CLANG_ABI LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
+ #define CLANG_TEMPLATE_ABI
+ #define CLANG_EXPORT_TEMPLATE
+diff --git a/llvm/include/llvm/ADT/bit.h b/llvm/include/llvm/ADT/bit.h
+index d6e33c3e6..211e28be1 100644
+--- a/llvm/include/llvm/ADT/bit.h
++++ b/llvm/include/llvm/ADT/bit.h
+@@ -30,7 +30,8 @@
+ 
+ #if defined(__linux__) || defined(__GNU__) || defined(__HAIKU__) ||            \
+     defined(__Fuchsia__) || defined(__EMSCRIPTEN__) || defined(__NetBSD__) ||  \
+-    defined(__OpenBSD__) || defined(__DragonFly__) || defined(__managarm__)
++    defined(__OpenBSD__) || defined(__DragonFly__) || defined(__managarm__) ||  \
++    defined(__wasi__)
+ #include <endian.h>
+ #elif defined(_AIX)
+ #include <sys/machine.h>
+diff --git a/llvm/include/llvm/Support/Compiler.h b/llvm/include/llvm/Support/Compiler.h
+index 297d3e9b0..a93026510 100644
+--- a/llvm/include/llvm/Support/Compiler.h
++++ b/llvm/include/llvm/Support/Compiler.h
+@@ -201,7 +201,11 @@
+ #define LLVM_TEMPLATE_ABI LLVM_ABI
+ #define LLVM_EXPORT_TEMPLATE
+ #define LLVM_ABI_EXPORT LLVM_ABI
+-#elif defined(__MACH__) || defined(__WASM__) || defined(__EMSCRIPTEN__)
++// __WASM__ is not defined by any compiler; clang spells it __wasm__. Without this,
++// wasm targets match no branch above (wasm is not ELF) and the ABI macros are left
++// undefined, so every consumer of these headers fails to parse the TableGen output.
++#elif defined(__MACH__) || defined(__WASM__) || defined(__wasm__) ||           \
++    defined(__EMSCRIPTEN__)
+ #define LLVM_ABI __attribute__((visibility("default")))
+ #define LLVM_TEMPLATE_ABI
+ #define LLVM_EXPORT_TEMPLATE
+diff --git a/llvm/lib/Support/CrashRecoveryContext.cpp b/llvm/lib/Support/CrashRecoveryContext.cpp
+index fc30d4215..138d07618 100644
+--- a/llvm/lib/Support/CrashRecoveryContext.cpp
++++ b/llvm/lib/Support/CrashRecoveryContext.cpp
+@@ -14,7 +14,9 @@
+ #include "llvm/Support/thread.h"
+ #include <cassert>
+ #include <mutex>
++#if !defined(__wasi__)
+ #include <setjmp.h>
++#endif
+ 
+ using namespace llvm;
+ 
+@@ -31,7 +33,9 @@ struct CrashRecoveryContextImpl {
+   const CrashRecoveryContextImpl *Next;
+ 
+   CrashRecoveryContext *CRC;
++#if !defined(__wasi__)
+   ::jmp_buf JumpBuffer;
++#endif
+   volatile unsigned Failed : 1;
+   unsigned SwitchedThread : 1;
+   unsigned ValidJumpBuffer : 1;
+@@ -73,8 +77,10 @@ public:
+     CRC->RetCode = RetCode;
+ 
+     // Jump back to the RunSafely we were called under.
++#if !defined(__wasi__)
+     if (ValidJumpBuffer)
+       longjmp(JumpBuffer, 1);
++#endif
+ 
+     // Otherwise let the caller decide of the outcome of the crash. Currently
+     // this occurs when using SEH on Windows with MSVC or clang-cl.
+@@ -329,6 +335,13 @@ static void uninstallExceptionOrSignalHandlers() {
+   }
+ }
+ 
++#elif defined(__wasi__)
++
++// WASI has no signals; there is nothing to install.
++
++static void installExceptionOrSignalHandlers() {}
++static void uninstallExceptionOrSignalHandlers() {}
++
+ #else // !_WIN32
+ 
+ // Generic POSIX implementation.
+@@ -417,10 +430,12 @@ bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
+     CrashRecoveryContextImpl *CRCI = new CrashRecoveryContextImpl(this);
+     Impl = CRCI;
+ 
++#if !defined(__wasi__)
+     CRCI->ValidJumpBuffer = true;
+     if (setjmp(CRCI->JumpBuffer) != 0) {
+       return false;
+     }
++#endif
+   }
+ 
+   Fn();
+@@ -469,6 +484,9 @@ bool CrashRecoveryContext::throwIfCrash(int RetCode) {
+     return false;
+ #if defined(_WIN32)
+   ::RaiseException(RetCode, 0, 0, NULL);
++#elif defined(__wasi__)
++  // No signals to re-raise; the caller sees the crash through the return code.
++  llvm::sys::unregisterHandlers();
+ #else
+   llvm::sys::unregisterHandlers();
+   raise(RetCode - 128);
+diff --git a/llvm/lib/Support/LockFileManager.cpp b/llvm/lib/Support/LockFileManager.cpp
+index cdded5110..8c20b6e8e 100644
+--- a/llvm/lib/Support/LockFileManager.cpp
++++ b/llvm/lib/Support/LockFileManager.cpp
+@@ -111,7 +111,7 @@ static std::error_code getHostID(SmallVectorImpl<char> &HostID) {
+ }
+ 
+ bool LockFileManager::processStillExecuting(StringRef HostID, int PID) {
+-#if LLVM_ON_UNIX && !defined(__ANDROID__)
++#if LLVM_ON_UNIX && !defined(__ANDROID__) && !defined(__wasi__)
+   SmallString<256> StoredHostID;
+   if (getHostID(StoredHostID))
+     return true; // Conservatively assume it's executing on error.
+diff --git a/llvm/lib/Support/Program.cpp b/llvm/lib/Support/Program.cpp
+index 23de621c6..edcb78a31 100644
+--- a/llvm/lib/Support/Program.cpp
++++ b/llvm/lib/Support/Program.cpp
+@@ -97,7 +97,9 @@ void sys::printArg(raw_ostream &OS, StringRef Arg, bool Quote) {
+ }
+ 
+ // Include the platform-specific parts of this class.
+-#ifdef LLVM_ON_UNIX
++#if defined(__wasi__)
++#include "WASI/Program.inc"
++#elif defined(LLVM_ON_UNIX)
+ #include "Unix/Program.inc"
+ #endif
+ #ifdef _WIN32
+diff --git a/llvm/lib/Support/ProgramStack.cpp b/llvm/lib/Support/ProgramStack.cpp
+index e48265afb..e7fa0885e 100644
+--- a/llvm/lib/Support/ProgramStack.cpp
++++ b/llvm/lib/Support/ProgramStack.cpp
+@@ -40,7 +40,7 @@ uintptr_t llvm::getStackPointer() {
+ }
+ 
+ unsigned llvm::getDefaultStackSize() {
+-#ifdef LLVM_ON_UNIX
++#if defined(LLVM_ON_UNIX) && !defined(__wasi__)
+   rlimit RL;
+   getrlimit(RLIMIT_STACK, &RL);
+   return RL.rlim_cur;
+diff --git a/llvm/lib/Support/Signals.cpp b/llvm/lib/Support/Signals.cpp
+index f8a14a45d..77b91e03d 100644
+--- a/llvm/lib/Support/Signals.cpp
++++ b/llvm/lib/Support/Signals.cpp
+@@ -349,7 +349,9 @@ static bool printMarkupStackTrace(StringRef Argv0, void **StackTrace, int Depth,
+ }
+ 
+ // Include the platform-specific parts of this class.
+-#ifdef LLVM_ON_UNIX
++#if defined(__wasi__)
++#include "WASI/Signals.inc"
++#elif defined(LLVM_ON_UNIX)
+ #include "Unix/Signals.inc"
+ #endif
+ #ifdef _WIN32
+diff --git a/llvm/lib/Support/Unix/Path.inc b/llvm/lib/Support/Unix/Path.inc
+index 362eec5eb..330274fc3 100644
+--- a/llvm/lib/Support/Unix/Path.inc
++++ b/llvm/lib/Support/Unix/Path.inc
+@@ -28,7 +28,9 @@
+ #endif
+ 
+ #include <dirent.h>
++#if !defined(__wasi__)
+ #include <pwd.h>
++#endif
+ 
+ #ifdef __APPLE__
+ #include <copyfile.h>
+@@ -321,6 +323,10 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
+       return std::string(real_path);
+     break; // Found entry, but realpath failed.
+   }
++#elif defined(__wasi__)
++  // WASI has neither dladdr nor a process filesystem; argv[0] as passed by the
++  // embedder is the only name the module has for itself.
++  return argv0;
+ #elif defined(HAVE_DLOPEN)
+   // Use dladdr to get executable path if available.
+   Dl_info DLInfo;
+@@ -555,6 +561,10 @@ static bool is_local_impl(struct STATVFS &Vfs) {
+   // The file system can have an arbitrary structure on z/OS; must go with the
+   // conservative answer.
+   return false;
++#elif defined(__wasi__)
++  // WASI's statvfs carries no mount flags, and a preopened directory may be
++  // backed by anything; "not local" is the conservative answer.
++  return false;
+ #else
+   return !!(STATVFS_F_FLAG(Vfs) & MNT_LOCAL);
+ #endif
+@@ -662,7 +672,7 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
+   PathStr = PathStr.drop_front();
+   StringRef Expr =
+       PathStr.take_until([](char c) { return path::is_separator(c); });
+-  StringRef Remainder = PathStr.substr(Expr.size() + 1);
++  [[maybe_unused]] StringRef Remainder = PathStr.substr(Expr.size() + 1);
+   SmallString<128> Storage;
+   if (Expr.empty()) {
+     // This is just ~/..., resolve it to the current user's home dir.
+@@ -679,6 +689,11 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
+ 
+   // This is a string of the form ~username/, look up this user's entry in the
+   // password database.
++#if defined(__wasi__)
++  // WASI has no user database, so ~user cannot be resolved: leave the path as
++  // written, which is what a failed lookup does below.
++  return;
++#else
+   std::unique_ptr<char[]> Buf;
+   long BufSize = sysconf(_SC_GETPW_R_SIZE_MAX);
+   if (BufSize <= 0)
+@@ -698,6 +713,7 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
+   Path.clear();
+   Path.append(Entry->pw_dir, Entry->pw_dir + strlen(Entry->pw_dir));
+   llvm::sys::path::append(Path, Storage);
++#endif // !defined(__wasi__)
+ }
+ 
+ void expand_tilde(const Twine &path, SmallVectorImpl<char> &dest) {
+@@ -774,11 +790,16 @@ std::error_code status(int FD, file_status &Result) {
+ }
+ 
+ unsigned getUmask() {
++#if defined(__wasi__)
++  // WASI has no process umask; nothing masks the permissions we request.
++  return 0;
++#else
+   // Chose arbitary new mask and reset the umask to the old mask.
+   // umask(2) never fails so ignore the return of the second call.
+   unsigned Mask = ::umask(0);
+   (void)::umask(Mask);
+   return Mask;
++#endif
+ }
+ 
+ std::error_code setPermissions(const Twine &Path, perms Permissions) {
+@@ -1379,11 +1400,16 @@ std::error_code real_path(const Twine &path, SmallVectorImpl<char> &dest,
+ }
+ 
+ std::error_code changeFileOwnership(int FD, uint32_t Owner, uint32_t Group) {
++#if defined(__wasi__)
++  // WASI files have no owner or group.
++  return make_error_code(errc::function_not_supported);
++#else
+   auto FChown = [&]() { return ::fchown(FD, Owner, Group); };
+   // Retry if fchown call fails due to interruption.
+   if ((sys::RetryAfterSignal(-1, FChown)) < 0)
+     return errnoAsErrorCode();
+   return std::error_code();
++#endif
+ }
+ 
+ } // end namespace fs
+@@ -1393,6 +1419,9 @@ namespace path {
+ bool home_directory(SmallVectorImpl<char> &result) {
+   std::unique_ptr<char[]> Buf;
+   char *RequestedDir = getenv("HOME");
++#if !defined(__wasi__)
++  // Falling back to the password database is not possible on WASI; $HOME, which
++  // the embedder controls, is the only source of a home directory.
+   if (!RequestedDir) {
+     long BufSize = sysconf(_SC_GETPW_R_SIZE_MAX);
+     if (BufSize <= 0)
+@@ -1404,6 +1433,7 @@ bool home_directory(SmallVectorImpl<char> &result) {
+     if (pw && pw->pw_dir)
+       RequestedDir = pw->pw_dir;
+   }
++#endif
+   if (!RequestedDir)
+     return false;
+ 
+diff --git a/llvm/lib/Support/Unix/Process.inc b/llvm/lib/Support/Unix/Process.inc
+index c6e79af44..7f4443f96 100644
+--- a/llvm/lib/Support/Unix/Process.inc
++++ b/llvm/lib/Support/Unix/Process.inc
+@@ -136,6 +136,10 @@ void Process::GetTimeUsage(TimePoint<> &elapsed,
+ // their operation. To prevent the disk from filling up, this function
+ // does what's necessary to prevent their generation.
+ void Process::PreventCoreFiles() {
++#if defined(__wasi__)
++  // WASI has no resource limits and produces no core files.
++  coreFilesPrevented = true;
++#else
+   struct rlimit rlim;
+   getrlimit(RLIMIT_CORE, &rlim);
+ #ifdef __linux__
+@@ -188,6 +192,7 @@ void Process::PreventCoreFiles() {
+ #endif
+ 
+   coreFilesPrevented = true;
++#endif // !defined(__wasi__)
+ }
+ 
+ std::optional<std::string> Process::GetEnv(StringRef Name) {
+@@ -252,6 +257,12 @@ std::error_code Process::FixupStandardFileDescriptors() {
+ }
+ 
+ std::error_code Process::SafelyCloseFileDescriptor(int FD) {
++#if defined(__wasi__)
++  // No signals can interrupt the close, so no mask is needed.
++  if (::close(FD) < 0 && errno != EINTR)
++    return errnoAsErrorCode();
++  return std::error_code();
++#else
+   // Create a signal set filled with *all* signals.
+   sigset_t FullSet, SavedSet;
+   if (sigfillset(&FullSet) < 0 || sigfillset(&SavedSet) < 0)
+@@ -284,6 +295,7 @@ std::error_code Process::SafelyCloseFileDescriptor(int FD) {
+   if (ErrnoFromClose)
+     return std::error_code(ErrnoFromClose, std::generic_category());
+   return std::error_code(EC, std::generic_category());
++#endif // !defined(__wasi__)
+ }
+ 
+ bool Process::StandardInIsUserInput() {
+@@ -320,7 +332,7 @@ static unsigned getColumns(int FileID) {
+   // instead if it isn't available.
+   unsigned Columns = 0;
+ 
+-#if defined(HAVE_SYS_IOCTL_H) && !defined(__sun__)
++#if defined(HAVE_SYS_IOCTL_H) && !defined(__sun__) && !defined(__wasi__)
+   struct winsize ws;
+   if (ioctl(FileID, TIOCGWINSZ, &ws) == 0)
+     Columns = ws.ws_col;
+diff --git a/llvm/lib/Support/Unix/Unix.h b/llvm/lib/Support/Unix/Unix.h
+index a1d44c69a..93e432005 100644
+--- a/llvm/lib/Support/Unix/Unix.h
++++ b/llvm/lib/Support/Unix/Unix.h
+@@ -30,7 +30,9 @@
+ #include <cstring>
+ #include <string>
+ #include <sys/types.h>
++#if !defined(__wasi__)
+ #include <sys/wait.h>
++#endif
+ 
+ #ifdef HAVE_UNISTD_H
+ #include <unistd.h>
+diff --git a/llvm/lib/Support/Unix/Watchdog.inc b/llvm/lib/Support/Unix/Watchdog.inc
+index b33e52d88..b18f0a40c 100644
+--- a/llvm/lib/Support/Unix/Watchdog.inc
++++ b/llvm/lib/Support/Unix/Watchdog.inc
+@@ -19,13 +19,13 @@
+ namespace llvm {
+ namespace sys {
+ Watchdog::Watchdog(unsigned int seconds) {
+-#ifdef HAVE_UNISTD_H
++#if defined(HAVE_UNISTD_H) && !defined(__wasi__)
+   alarm(seconds);
+ #endif
+ }
+ 
+ Watchdog::~Watchdog() {
+-#ifdef HAVE_UNISTD_H
++#if defined(HAVE_UNISTD_H) && !defined(__wasi__)
+   alarm(0);
+ #endif
+ }
+diff --git a/llvm/lib/Support/raw_socket_stream.cpp b/llvm/lib/Support/raw_socket_stream.cpp
+index fd1c68167..258e7182a 100644
+--- a/llvm/lib/Support/raw_socket_stream.cpp
++++ b/llvm/lib/Support/raw_socket_stream.cpp
+@@ -41,6 +41,11 @@
+ 
+ using namespace llvm;
+ 
++// WASI has no Unix-domain sockets: `sockaddr_un` exists in wasi-libc but carries no
++// `sun_path`, and there is no socket()/bind()/listen(). Nothing in a browser toolchain
++// listens on a socket, so the implementation is compiled out entirely; any future user
++// of these symbols on wasm gets a link error rather than silent breakage.
++#if !defined(__wasi__)
+ #ifdef _WIN32
+ WSABalancer::WSABalancer() {
+   WSADATA WsaData;
+@@ -356,3 +361,5 @@ ssize_t raw_socket_stream::read(char *Ptr, size_t Size,
+   }
+   return raw_fd_stream::read(Ptr, Size);
+ }
++
++#endif // !defined(__wasi__)

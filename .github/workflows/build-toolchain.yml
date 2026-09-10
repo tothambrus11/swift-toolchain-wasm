@@ -1,0 +1,148 @@
+name: Build wasm toolchain
+
+# Produces the WebAssembly-hosted Swift toolchain — swift-frontend.wasm, wasm-ld.wasm
+# and the packed sysroot — and publishes them so a web IDE can fetch and run them.
+#
+# The build does not fit in one GitHub Actions job: cross-compiling LLVM, clang and the
+# Swift frontend takes several hours, against a six-hour job limit. The workflow is
+# therefore *resumable*. Every stage caches its build tree, and each job stops a little
+# before the limit, saves the cache, and reports whether it finished. Re-running the
+# workflow continues from where it stopped instead of starting over.
+
+on:
+  workflow_dispatch:
+    inputs:
+      swift_version:
+        description: Swift release to build against
+        default: "6.3.3"
+      publish_release:
+        description: Publish artifacts as a GitHub release
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
+concurrency:
+  # Never two builds writing the same cache.
+  group: toolchain-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SWIFT_VERSION: ${{ inputs.swift_version || '6.3.3' }}
+  WASI_SDK_VERSION: "34.0"
+  # Leave headroom under the 6h limit to save caches and upload artifacts.
+  STAGE_TIMEOUT_MINUTES: "300"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    outputs:
+      complete: ${{ steps.pipeline.outputs.complete }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang lld python3
+          # A standalone WASI runtime, so the artifacts are tested the way they are used.
+          curl -fsSL https://wasmtime.dev/install.sh | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+
+      - name: Install Swift ${{ env.SWIFT_VERSION }} and the wasm SDK
+        run: |
+          # Needed for Stage 40 (the sysroot comes out of the official SDK bundle) and
+          # for building the example programs the artifacts are smoke-tested against.
+          curl -fsSL -o swiftly.tar.gz https://download.swift.org/swiftly/linux/swiftly-x86_64.tar.gz
+          tar -xzf swiftly.tar.gz
+          ./swiftly init -y --skip-install
+          . "$HOME/.local/share/swiftly/env.sh"
+          swiftly install "$SWIFT_VERSION" --use
+          swift sdk install \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/wasm-sdk/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE_wasm.artifactbundle.tar.gz" \
+            --checksum "${{ vars.SWIFT_WASM_SDK_CHECKSUM || 'cabfa08b73bb8ac783927ecd15fa386e99d0c139c5f232445067bcf58379cae7' }}"
+
+      # Sources are large and immutable for a given Swift release: cache them separately
+      # from the build trees so a cache eviction does not force a re-clone of LLVM.
+      - name: Restore sources
+        uses: actions/cache@v4
+        with:
+          path: src
+          key: src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}
+
+      # The build trees are the expensive thing. `restore-keys` is what makes the build
+      # resumable: a run that timed out leaves a partial tree under a stale key, and the
+      # next run picks it up and continues.
+      - name: Restore build trees
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: build-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-${{ github.run_id }}
+          restore-keys: |
+            build-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-
+            build-${{ env.SWIFT_VERSION }}-
+
+      - name: Build
+        id: pipeline
+        run: |
+          . "$HOME/.local/share/swiftly/env.sh"
+          set -o pipefail
+          # If the stage budget runs out, exit 0 with complete=false: the cache is still
+          # saved and the next run continues. Only a real build error fails the job.
+          if timeout "${STAGE_TIMEOUT_MINUTES}m" ./scripts/build-all.sh 2>&1 | tee build.log; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          elif [ "${PIPESTATUS[0]}" = "124" ]; then
+            echo "::warning::Stage budget exhausted; re-run this workflow to continue."
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Build failed. See build.log."
+            exit 1
+          fi
+
+      - name: Smoke-test the toolchain
+        if: steps.pipeline.outputs.complete == 'true'
+        run: |
+          . "$HOME/.local/share/swiftly/env.sh"
+          ./scripts/50-smoke-test.sh
+
+      - name: Compress artifacts
+        if: steps.pipeline.outputs.complete == 'true'
+        run: |
+          # Serve-ready: browsers fetch these over the network, so ship them compressed.
+          for f in out/*.wasm out/*.tar; do
+            [ -f "$f" ] || continue
+            gzip -9 -k "$f"
+          done
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: steps.pipeline.outputs.complete == 'true'
+        with:
+          name: swift-toolchain-wasm-${{ env.SWIFT_VERSION }}
+          path: out/
+          retention-days: 30
+
+      - name: Publish release
+        if: steps.pipeline.outputs.complete == 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          fail_on_unmatched_files: true
+          body: |
+            WebAssembly-hosted Swift toolchain, built from Swift ${{ env.SWIFT_VERSION }}.
+
+            | File | What |
+            | --- | --- |
+            | `swift-frontend.wasm` | the Swift compiler frontend, running on wasm |
+            | `wasm-ld.wasm` | LLVM's wasm linker, running on wasm |
+            | `swift-sysroot-core.tar` | stdlib modules, archives and wasi-libc to mount in the browser |
+
+            Serve these next to a page and point a `WasmBackend` at the directory.
+
+      - name: Report incomplete build
+        if: steps.pipeline.outputs.complete != 'true'
+        run: |
+          echo "### Build incomplete" >> "$GITHUB_STEP_SUMMARY"
+          echo "The stage budget was exhausted. Re-run this workflow; it resumes from the cached build trees." >> "$GITHUB_STEP_SUMMARY"
+          tail -50 build.log >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,4 @@
+# Third-party sources and build trees: large, reproducible from scripts/00-fetch-sources.sh
+src/
+build/
+out/
