@@ -40,25 +40,54 @@ RuntimeError: memory access out of bounds
   at swift::Mangle::ASTMangler::appendType(...)
 ```
 
-What is known about it:
+### What instrumenting it showed
+
+Printing from inside `appendRetroactiveConformances` before the fault:
+
+```
+[probe] conformances=2
+[probe] ref opaque=0x61d5e60 invalid=0 abstract=1 concrete=0 pack=0
+[probe] protocol=0x4814da0
+<trap: memory access out of bounds inside isMarkerProtocol()>
+```
+
+So: the substitution map holds two conformances; the first is **abstract**, not concrete;
+`getProtocol()` returns a pointer that is well-formed and 32-byte aligned, well inside
+linear memory. The fault happens *after* that, inside
+
+```cpp
+bool ProtocolDecl::isMarkerProtocol() const {
+  return getAttrs().hasAttribute<MarkerAttr>();
+}
+```
+
+which walks the declaration's attribute list. That rules out the obvious first guess — a
+mangled `ProtocolConformanceRef` — and points instead at either the `ProtocolDecl` pointer
+being plausible-but-wrong (so `Attrs` is read from the wrong offset) or the attribute
+chain itself being corrupt.
+
+Measured on wasm32, `alignof(ProtocolConformance)` is 8 and
+`PointerLikeTypeTraits<ProtocolConformance *>::NumLowBitsAvailable` is 3, so the
+three-way `PointerUnion` in `ProtocolConformanceRef` has the bits it needs. **The
+pointer-packing hypothesis below is therefore disproven for this type**, and the search
+should move to how `AbstractConformance` is laid out and allocated on a 32-bit host.
+
+What else is known:
 
 * **Not stack depth.** Relinking with a 64 MiB stack and `--stack-first`, so an overflow
   would trap cleanly at address zero, reproduces the same fault at the same place.
 * **Not the module cache or the sysroot.** The same compiler compiles other programs
   successfully against the same mounted sysroot.
-* **Almost certainly 32-bit pointer packing.** Two bugs of exactly this shape were already
-  found and fixed by static assertions — `swift/lib/IRGen/Address.h` and
-  `swift/lib/SILOptimizer/Utils/StackNesting.cpp` both packed a three-bit enum into an
-  `llvm::Value *`/`SILInstruction *`, which a 64-bit host has room for and a 32-bit host
-  does not. `ProtocolConformanceRef` holds a three-way `PointerUnion`, which needs two
-  spare low bits — available only if every one of `AbstractConformance`,
-  `ProtocolConformance` and `PackConformance` is allocated 4-byte aligned. A case where
-  one is not would corrupt the pointer silently rather than firing an assertion, which
-  matches the symptom exactly.
+* **32-bit-specific.** Two bugs of exactly this shape were already found and fixed here —
+  `swift/lib/IRGen/Address.h` and `swift/lib/SILOptimizer/Utils/StackNesting.cpp` both
+  packed a three-bit enum into an `llvm::Value *` / `SILInstruction *`, which a 64-bit host
+  has room for and a 32-bit host does not. Those two announced themselves with static
+  assertions. This one does not, so it is something that goes wrong silently: a layout or
+  allocation assumption rather than a bit-packing one that the compiler can check.
 
-That last point is a hypothesis, not a diagnosis. Confirming it means checking the
-alignment those conformance types are actually allocated with in the ASTContext arena on
-a 32-bit host.
+The next step is to look at `AbstractConformance` — how it is laid out, and with what
+alignment it is allocated in the ASTContext arena — since the failing conformance is
+abstract and the protocol pointer it yields is the one that misbehaves.
 
 ## Consequences
 
