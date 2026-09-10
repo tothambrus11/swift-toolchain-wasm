@@ -51,6 +51,28 @@ index b75e0c83..7849785b 100644
  else()
    find_package(UUID REQUIRED)
    set(UUID_INCLUDE "${UUID_INCLUDE_DIRS}")
+diff --git a/lib/Basic/Default/TaskQueue.inc b/lib/Basic/Default/TaskQueue.inc
+index fd590e81..08a29cb3 100644
+--- a/lib/Basic/Default/TaskQueue.inc
++++ b/lib/Basic/Default/TaskQueue.inc
+@@ -55,7 +55,7 @@ unsigned TaskQueue::getNumberOfParallelTasks() const {
+ void TaskQueue::addTask(const char *ExecPath, ArrayRef<const char *> Args,
+                         ArrayRef<const char *> Env, void *Context,
+                         bool SeparateErrors) {
+-  auto T = make_unique<Task>(ExecPath, Args, Env, Context, SeparateErrors);
++  auto T = std::make_unique<Task>(ExecPath, Args, Env, Context, SeparateErrors);
+   QueuedTasks.push(std::move(T));
+ }
+ 
+@@ -81,7 +81,7 @@ bool TaskQueue::execute(TaskBeganCallback Began, TaskFinishedCallback Finished,
+     }
+ 
+     std::string ErrMsg;
+-    T->PI = Wait(T->PI, 0, true, &ErrMsg);
++    T->PI = Wait(T->PI, /*SecondsToWait=*/std::nullopt, &ErrMsg);
+     int ReturnCode = T->PI.ReturnCode;
+ 
+     auto StdoutBuffer = llvm::MemoryBuffer::getFile(T->StdoutPath);
 diff --git a/lib/Basic/Program.cpp b/lib/Basic/Program.cpp
 index 473b41a8..f616f804 100644
 --- a/lib/Basic/Program.cpp
@@ -217,3 +239,77 @@ index 7aa78e83..f551363c 100644
  #else
    return uuid_compare(Value, y.Value);
  #endif
+diff --git a/lib/Driver/ToolChains.cpp b/lib/Driver/ToolChains.cpp
+index 06c88506..8f7a225f 100644
+--- a/lib/Driver/ToolChains.cpp
++++ b/lib/Driver/ToolChains.cpp
+@@ -1551,7 +1551,7 @@ static void appendInProcPluginServerPath(StringRef PluginPathRoot,
+   llvm::sys::path::append(InProcPluginServerPath, "bin", "SwiftInProcPluginServer.dll");
+ #elif defined(__APPLE__)
+   llvm::sys::path::append(InProcPluginServerPath, "lib", "swift", "host", "libSwiftInProcPluginServer.dylib");
+-#elif defined(__unix__)
++#elif defined(__unix__) || defined(__wasi__)
+   llvm::sys::path::append(InProcPluginServerPath, "lib", "swift", "host", "libSwiftInProcPluginServer.so");
+ #else
+ #error Unknown compiler host
+@@ -1563,14 +1563,14 @@ static void appendPluginsPath(StringRef PluginPathRoot,
+   PluginsPath.append(PluginPathRoot.begin(), PluginPathRoot.end());
+ #if defined(_WIN32)
+   llvm::sys::path::append(PluginsPath, "bin");
+-#elif defined(__APPLE__) || defined(__unix__)
++#elif defined(__APPLE__) || defined(__unix__) || defined(__wasi__)
+   llvm::sys::path::append(PluginsPath, "lib", "swift", "host", "plugins");
+ #else
+ #error Unknown compiler host
+ #endif
+ }
+ 
+-#if defined(__APPLE__) || defined(__unix__)
++#if defined(__APPLE__) || defined(__unix__) || defined(__wasi__)
+ static void appendLocalPluginsPath(StringRef PluginPathRoot,
+                                    llvm::SmallVectorImpl<char> &LocalPluginsPath) {
+   SmallString<261> localPluginPathRoot = PluginPathRoot;
+@@ -1598,7 +1598,7 @@ void ToolChain::addPluginArguments(const ArgList &Args,
+   Arguments.push_back(Args.MakeArgString(defaultPluginPath));
+ 
+   // Local plugin path.
+-#if defined(__APPLE__) || defined(__unix__)
++#if defined(__APPLE__) || defined(__unix__) || defined(__wasi__)
+   SmallString<261> localPluginPath;
+   appendLocalPluginsPath(pluginPathRoot, localPluginPath);
+   Arguments.push_back("-plugin-path");
+diff --git a/lib/IRGen/Address.h b/lib/IRGen/Address.h
+index ce609060..56b588da 100644
+--- a/lib/IRGen/Address.h
++++ b/lib/IRGen/Address.h
+@@ -173,7 +173,30 @@ public:
+   /// The address of an object of type T.
+   Address Addr;
+ 
++#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ < 8
++  /// Kind needs three bits, and a 32-bit host (wasm32 among them) leaves only two
++  /// spare low bits in an `llvm::Value *`. Store the two separately there rather
++  /// than over-packing the pointer; the interface is the part that matters.
++  class ExtraInfoAndKindStorage {
++    llvm::Value *Pointer;
++    Kind Int;
++
++  public:
++    ExtraInfoAndKindStorage(llvm::Value *Pointer, Kind Int)
++      : Pointer(Pointer), Int(Int) {}
++
++    llvm::Value *getPointer() const { return Pointer; }
++    Kind getInt() const { return Int; }
++
++    bool operator==(const ExtraInfoAndKindStorage &RHS) const {
++      return Pointer == RHS.Pointer && Int == RHS.Int;
++    }
++  };
++
++  ExtraInfoAndKindStorage ExtraInfoAndKind;
++#else
+   llvm::PointerIntPair<llvm::Value*, 3, Kind> ExtraInfoAndKind;
++#endif
+ 
+ public:
+   StackAddress() : ExtraInfoAndKind(nullptr, StaticAlloca) {}
