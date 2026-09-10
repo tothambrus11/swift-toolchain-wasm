@@ -1,99 +1,73 @@
 # Status: what the wasm-hosted Swift compiler does today
 
-`swift-frontend.wasm` builds, runs, and compiles Swift to object code — for a subset of
-the language. This records exactly where the line is, because "it works" and "it works
-for everything" are very different claims.
+`swift-frontend.wasm` and `wasm-ld.wasm` compile, link and run Swift in a browser tab.
 
 ## Works
 
-`swift-frontend.wasm` (146 MiB) runs under a plain WASI runtime, reads its arguments,
-loads the standard library from the mounted sysroot, type-checks, runs SIL, and emits a
-wasm object file. A single-file compile takes about a second.
-
-```
-let x = 1                            ✅ compiles
-func f(_ a: Int) -> Int { a * 2 }    ✅ compiles
-struct S { var a: Int }              ✅ compiles
-let s = "hi"                         ✅ compiles
+```swift
+let squares = (1...5).map { $0 * $0 }
+print("squares: \(squares)")          // squares: [1, 4, 9, 16, 25]
 ```
 
-`wasm-ld.wasm` (57 MiB) links object files into runnable programs, verified end to end:
-a C object compiled by wasi-sdk, linked by wasm-ld running as wasm, and the resulting
-program executed — no native tool in any step.
+That program is the end-to-end test: compiled by `swift-frontend.wasm`, linked by
+`wasm-ld.wasm`, executed under a WASI shim, with its **stdout asserted**. No native tool
+takes part in any step.
 
-## Does not work yet
+Also verified compiling: structs and protocol conformances (`CustomStringConvertible`),
+dictionaries and sorting, string interpolation, closures, generics through `map`.
 
-Anything whose mangling walks protocol conformances traps:
+A single-file compile takes roughly one second in Node, about three in a browser tab.
+`swift-frontend.wasm` is 146 MiB and `wasm-ld.wasm` is 57 MiB.
 
-```
-print("hello")                       ❌ RuntimeError: memory access out of bounds
-let a = [1, 2, 3]                    ❌ RuntimeError: memory access out of bounds
-```
+## The 32-bit bugs that had to be fixed first
 
-The trap is inside name mangling:
-
-```
-RuntimeError: memory access out of bounds
-  at swift::ProtocolDecl::isMarkerProtocol() const
-  at swift::Mangle::ASTMangler::appendRetroactiveConformances(SubstitutionMap, GenericSignature)
-  at swift::Mangle::ASTMangler::appendRetroactiveConformances(Type, GenericSignature)
-  at swift::Mangle::ASTMangler::appendType(...)
-```
-
-### What instrumenting it showed
-
-Printing from inside `appendRetroactiveConformances` before the fault:
-
-```
-[probe] conformances=2
-[probe] ref opaque=0x61d5e60 invalid=0 abstract=1 concrete=0 pack=0
-[probe] protocol=0x4814da0
-<trap: memory access out of bounds inside isMarkerProtocol()>
-```
-
-So: the substitution map holds two conformances; the first is **abstract**, not concrete;
-`getProtocol()` returns a pointer that is well-formed and 32-byte aligned, well inside
-linear memory. The fault happens *after* that, inside
+Swift declares how many spare low bits a pointer to each AST type has:
 
 ```cpp
-bool ProtocolDecl::isMarkerProtocol() const {
-  return getAttrs().hasAttribute<MarkerAttr>();
-}
+LLVM_DECLARE_TYPE_ALIGNMENT(swift::TypeBase, swift::TypeAlignInBits)
 ```
 
-which walks the declaration's attribute list. That rules out the obvious first guess — a
-mangled `ProtocolConformanceRef` — and points instead at either the `ProtocolDecl` pointer
-being plausible-but-wrong (so `Attrs` is read from the wrong offset) or the attribute
-chain itself being corrupt.
+Nothing checks that the type is really that aligned. On a 64-bit host the promise is
+often kept by accident — a couple of pointers give natural alignment 8, which is the
+three bits usually claimed — so a type can be under-aligned on a 32-bit host and nobody
+notices. Nothing asserts; pointers just come back subtly wrong.
 
-Measured on wasm32, `alignof(ProtocolConformance)` is 8 and
-`PointerLikeTypeTraits<ProtocolConformance *>::NumLowBitsAvailable` is 3, so the
-three-way `PointerUnion` in `ProtocolConformanceRef` has the bits it needs. **The
-pointer-packing hypothesis below is therefore disproven for this type**, and the search
-should move to how `AbstractConformance` is laid out and allocated on a 32-bit host.
+Two types were breaking Swift on wasm32:
 
-What else is known:
+* **`AbstractConformance`** promised three bits but was allocated with
+  `alignof(AbstractConformance)`: a `FoldingSetNode` plus two pointers, so 8 on a 64-bit
+  host and **4** on wasm32. Symptom: `memory access out of bounds` inside
+  `ProtocolDecl::isMarkerProtocol()`, reached from
+  `ASTMangler::appendRetroactiveConformances`. This is what made `print()` and array
+  literals uncompilable.
+* **`CompoundDeclName`** (and `SelectiveDeclNameRef`) used `alignas(Identifier)` — the
+  alignment of a `const char *`, which is 8 only on a 64-bit host. `DeclName` promises
+  `DeclBaseName`'s three bits minus one for the union tag, so it needs eight-byte
+  alignment; on wasm32 it got four. Symptom: the clobbered bit turned one name into
+  another, and diagnostics printed identifiers as garbage —
+  `value of type 'DefaultStringInterpolation' has no member 'D<?><?>r<?>'`.
 
-* **Not stack depth.** Relinking with a 64 MiB stack and `--stack-first`, so an overflow
-  would trap cleanly at address zero, reproduces the same fault at the same place.
-* **Not the module cache or the sysroot.** The same compiler compiles other programs
-  successfully against the same mounted sysroot.
-* **32-bit-specific.** Two bugs of exactly this shape were already found and fixed here —
-  `swift/lib/IRGen/Address.h` and `swift/lib/SILOptimizer/Utils/StackNesting.cpp` both
-  packed a three-bit enum into an `llvm::Value *` / `SILInstruction *`, which a 64-bit host
-  has room for and a 32-bit host does not. Those two announced themselves with static
-  assertions. This one does not, so it is something that goes wrong silently: a layout or
-  allocation assumption rather than a bit-packing one that the compiler can check.
+Both now state the alignment their traits already claim, the way `ProtocolConformance`
+and `Decl` do.
 
-The next step is to look at `AbstractConformance` — how it is laid out, and with what
-alignment it is allocated in the ASTContext arena — since the failing conformance is
-abstract and the protocol pointer it yields is the one that misbehaves.
+`scripts/55-check-alignment-contracts.sh` generates a `static_assert` per contract and
+compiles it for the target. It is how both bugs were found, and it runs as part of
+`build-all.sh` so a broken contract fails the build rather than producing a compiler that
+miscompiles somewhere far away.
 
-## Consequences
+That script also reports that **`swift::SILFunctionType` violates its contract on every
+host, 64-bit included** — a pre-existing upstream inconsistency that nothing appears to
+exercise. It is warned about, not treated as a wasm regression.
 
-Until this is fixed, the in-browser compiler handles simple programs and fails on most
-real ones. The pipeline around it — argument vectors, sysroot, linker, execution — is
-proven and does not change when the bug is fixed.
+## Known limits
 
-Separately, and independent of this bug: **macros and compiler plugins cannot work at
-all**, because they are spawned executables (see [porting.md](porting.md)).
+* **Macros and compiler plugins cannot work.** They are spawned executables, and WASI
+  cannot spawn anything — see [porting.md](porting.md). `SWIFT_BUILD_SWIFT_SYNTAX` is off.
+* **No Swift-implemented SIL optimizer passes.** `SWIFT_ENABLE_SWIFT_IN_SWIFT` is off,
+  because the compiler's own Swift modules need C++ interop and interop is broken for
+  `wasm32-unknown-wasip1` in the stock Swift 6.3.3 SDK: any C++ module import hits a Clang
+  module cycle, `SwiftWASILibc -> std_inttypes_h -> SwiftWASILibc`. That reproduces with a
+  two-line Swift file against the stock SDK, so it is upstream.
+* **4 GiB of address space.** Single-file compiles fit comfortably; whole-module builds of
+  large packages may not.
+* **Size.** ~300 MiB of artifacts on a cold load, before compression.
