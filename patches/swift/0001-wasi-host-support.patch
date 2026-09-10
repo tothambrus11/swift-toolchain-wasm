@@ -18,6 +18,22 @@ index f5596388..d0ec7701 100644
      endif()
      set("${module}_dep_target" ${dep_target})
      set(all_module_targets ${all_module_targets} ${dep_target})
+diff --git a/lib/AST/PluginRegistry.cpp b/lib/AST/PluginRegistry.cpp
+index 9495d91c..d526957f 100644
+--- a/lib/AST/PluginRegistry.cpp
++++ b/lib/AST/PluginRegistry.cpp
+@@ -220,6 +220,11 @@ LoadedExecutablePlugin::PluginProcess::~PluginProcess() {
+ #if defined(_WIN32)
+   _close(input);
+   _close(output);
++#elif defined(__wasi__)
++  // WASI has no signals to send, and no process to send them to: launching the
++  // plugin failed in the first place (see llvm/lib/Support/WASI/Program.inc).
++  close(input);
++  close(output);
+ #else
+   close(input);
+   close(output);
 diff --git a/lib/Basic/CMakeLists.txt b/lib/Basic/CMakeLists.txt
 index b75e0c83..7849785b 100644
 --- a/lib/Basic/CMakeLists.txt
@@ -35,6 +51,59 @@ index b75e0c83..7849785b 100644
  else()
    find_package(UUID REQUIRED)
    set(UUID_INCLUDE "${UUID_INCLUDE_DIRS}")
+diff --git a/lib/Basic/Program.cpp b/lib/Basic/Program.cpp
+index 473b41a8..f616f804 100644
+--- a/lib/Basic/Program.cpp
++++ b/lib/Basic/Program.cpp
+@@ -43,7 +43,9 @@ using namespace swift;
+ 
+ int swift::ExecuteInPlace(const char *Program, const char **args,
+                           const char **env) {
+-#if LLVM_ON_UNIX
++// WASI has no exec; the fallback below reports the failure through
++// llvm::sys::ExecuteAndWait, which says so on WASI (see WASI/Program.inc).
++#if LLVM_ON_UNIX && !defined(__wasi__)
+   int result;
+   if (env)
+     result = execve(Program, const_cast<char **>(args),
+@@ -76,7 +78,9 @@ toNullTerminatedCStringArray(ArrayRef<StringRef> array,
+   return result;
+ }
+ 
+-#if HAVE_UNISTD_H
++// WASI provides unistd.h but neither fork nor posix_spawn, so it takes the
++// "not supported" path at the bottom of this file.
++#if HAVE_UNISTD_H && !defined(__wasi__)
+ 
+ namespace {
+ struct Pipe {
+diff --git a/lib/Basic/Statistic.cpp b/lib/Basic/Statistic.cpp
+index d99bb7db..e2da5ae2 100644
+--- a/lib/Basic/Statistic.cpp
++++ b/lib/Basic/Statistic.cpp
+@@ -380,7 +380,7 @@ void UnifiedStatsReporter::recordJobMaxRSS(long rss) {
+ }
+ 
+ int64_t UnifiedStatsReporter::getChildrenMaxResidentSetSize() {
+-#if HAVE_GETRUSAGE && !defined(__HAIKU__)
++#if HAVE_GETRUSAGE && !defined(__HAIKU__) && !defined(__wasi__)
+   struct rusage RU;
+   ::getrusage(RUSAGE_CHILDREN, &RU);
+   int64_t M = static_cast<int64_t>(RU.ru_maxrss);
+diff --git a/lib/Basic/TaskQueue.cpp b/lib/Basic/TaskQueue.cpp
+index b26751ab..886c1f37 100644
+--- a/lib/Basic/TaskQueue.cpp
++++ b/lib/Basic/TaskQueue.cpp
+@@ -23,7 +23,8 @@ using namespace swift;
+ using namespace swift::sys;
+ 
+ // Include the correct TaskQueue implementation.
+-#if LLVM_ON_UNIX && !defined(__CYGWIN__) && !defined(__HAIKU__)
++// WASI cannot spawn processes, so it uses the Default queue, which runs nothing.
++#if LLVM_ON_UNIX && !defined(__CYGWIN__) && !defined(__HAIKU__) && !defined(__wasi__)
+ #include "Unix/TaskQueue.inc"
+ #elif defined(_WIN32)
+ #include "Windows/TaskQueue.inc"
 diff --git a/lib/Basic/UUID.cpp b/lib/Basic/UUID.cpp
 index 7aa78e83..f551363c 100644
 --- a/lib/Basic/UUID.cpp
