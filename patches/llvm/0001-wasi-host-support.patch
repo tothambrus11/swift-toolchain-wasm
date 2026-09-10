@@ -389,6 +389,232 @@ index b33e52d88..b18f0a40c 100644
    alarm(0);
  #endif
  }
+diff --git a/llvm/lib/Support/WASI/Program.inc b/llvm/lib/Support/WASI/Program.inc
+new file mode 100644
+index 000000000..16355e044
+--- /dev/null
++++ b/llvm/lib/Support/WASI/Program.inc
+@@ -0,0 +1,100 @@
++//===- llvm/Support/WASI/Program.inc - WASI Program Impl ---------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This file implements the WASI specific implementation of the Program class.
++//
++// WASI (preview 1) has no process model: no fork, no exec, no spawn, no wait.
++// A wasm module cannot start another program, so every entry point here reports
++// that rather than pretending to work. Callers that need to run a subprocess on
++// wasm must instead invoke the other tool in-process, or hand the work back to
++// the embedder, which is what a browser-hosted toolchain does anyway.
++//
++//===----------------------------------------------------------------------===//
++
++//===----------------------------------------------------------------------===//
++//=== WARNING: Implementation here must contain only generic WASI code that
++//===          is guaranteed to work on all WASI preview 1 hosts.
++//===----------------------------------------------------------------------===//
++
++#include "llvm/Support/Errc.h"
++#include "llvm/Support/FileSystem.h"
++#include "llvm/Support/raw_ostream.h"
++
++using namespace llvm;
++using namespace sys;
++
++ProcessInfo::ProcessInfo() : Pid(0), ReturnCode(0) {}
++
++ErrorOr<std::string> sys::findProgramByName(StringRef Name,
++                                            ArrayRef<StringRef> Paths) {
++  assert(!Name.empty() && "Must have a name!");
++  // Nothing can be executed, so no name resolves to a runnable program. Report
++  // the same error a PATH search would give for a missing tool.
++  return errc::no_such_file_or_directory;
++}
++
++static bool Execute(ProcessInfo &PI, StringRef Program,
++                    ArrayRef<StringRef> Args,
++                    std::optional<ArrayRef<StringRef>> Env,
++                    ArrayRef<std::optional<StringRef>> Redirects,
++                    unsigned MemoryLimit, std::string *ErrMsg,
++                    BitVector *AffinityMask, bool DetachProcess) {
++  if (ErrMsg)
++    *ErrMsg = "WASI does not support launching processes: cannot execute '" +
++              Program.str() + "'";
++  return false;
++}
++
++ProcessInfo llvm::sys::Wait(const ProcessInfo &PI,
++                            std::optional<unsigned> SecondsToWait,
++                            std::string *ErrMsg,
++                            std::optional<ProcessStatistics> *ProcStat,
++                            bool Polling) {
++  if (ProcStat)
++    ProcStat->reset();
++  if (ErrMsg)
++    *ErrMsg = "WASI does not support waiting for processes";
++  ProcessInfo WaitResult;
++  WaitResult.ReturnCode = -1;
++  return WaitResult;
++}
++
++std::error_code llvm::sys::ChangeStdinMode(fs::OpenFlags Flags) {
++  return std::error_code();
++}
++
++std::error_code llvm::sys::ChangeStdoutMode(fs::OpenFlags Flags) {
++  return std::error_code();
++}
++
++std::error_code llvm::sys::ChangeStdinToBinary() { return std::error_code(); }
++
++std::error_code llvm::sys::ChangeStdoutToBinary() { return std::error_code(); }
++
++std::error_code
++llvm::sys::writeFileWithEncoding(StringRef FileName, StringRef Contents,
++                                 WindowsEncodingMethod Encoding /*unused*/) {
++  std::error_code EC;
++  llvm::raw_fd_ostream OS(FileName, EC,
++                          llvm::sys::fs::OpenFlags::OF_TextWithCRLF);
++  if (EC)
++    return EC;
++
++  OS << Contents;
++
++  if (OS.has_error())
++    return make_error_code(errc::io_error);
++
++  return EC;
++}
++
++bool llvm::sys::commandLineFitsWithinSystemLimits(StringRef Program,
++                                                  ArrayRef<StringRef> Args) {
++  // There is no command line to overflow: nothing can be launched.
++  return true;
++}
+diff --git a/llvm/lib/Support/WASI/Signals.inc b/llvm/lib/Support/WASI/Signals.inc
+new file mode 100644
+index 000000000..41c0c82cc
+--- /dev/null
++++ b/llvm/lib/Support/WASI/Signals.inc
+@@ -0,0 +1,114 @@
++//===- llvm/Support/WASI/Signals.inc - WASI Signals Impl --------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This file defines some helpful functions for dealing with the possibility of
++// signals occurring while your program is running, on WASI.
++//
++// WASI (preview 1) delivers no signals: there is no sigaction, no siginfo_t and
++// no asynchronous interruption of a module, and a wasm trap tears the instance
++// down without unwinding. So nothing here can be triggered by the platform.
++// What remains is the bookkeeping half of the API, which callers still depend
++// on: handlers registered through AddSignalHandler run when the program calls
++// sys::RunSignalHandlers() itself, and files registered for removal are removed
++// on normal cleanup. Because no handler can run asynchronously, this
++// implementation has no signal-safety constraints and uses ordinary locking
++// rather than the atomic intrusive list the POSIX version needs.
++//
++//===----------------------------------------------------------------------===//
++
++//===----------------------------------------------------------------------===//
++//=== WARNING: Implementation here must contain only generic WASI code that
++//===          is guaranteed to work on all WASI preview 1 hosts.
++//===----------------------------------------------------------------------===//
++
++#include "llvm/Support/FileSystem.h"
++#include <mutex>
++#include <string>
++#include <vector>
++
++using namespace llvm;
++
++using SignalHandlerFunctionType = void (*)();
++static std::atomic<SignalHandlerFunctionType> InterruptFunction = nullptr;
++static std::atomic<SignalHandlerFunctionType> InfoSignalFunction = nullptr;
++static std::atomic<SignalHandlerFunctionType> OneShotPipeSignalFunction =
++    nullptr;
++
++static ManagedStatic<std::mutex> FilesToRemoveMutex;
++static ManagedStatic<std::vector<std::string>> FilesToRemove;
++
++static void RemoveFilesToRemove() {
++  std::lock_guard<std::mutex> Guard(*FilesToRemoveMutex);
++  for (const std::string &Filename : *FilesToRemove) {
++    // Only regular files, so that a stray entry cannot unlink something special.
++    sys::fs::file_status Status;
++    if (sys::fs::status(Filename, Status))
++      continue;
++    if (!sys::fs::is_regular_file(Status))
++      continue;
++    sys::fs::remove(Filename);
++  }
++  FilesToRemove->clear();
++}
++
++void sys::unregisterHandlers() {
++  // Nothing was ever registered with the platform.
++}
++
++void sys::CleanupOnSignal(uintptr_t Context) {
++  RunSignalHandlers();
++  RemoveFilesToRemove();
++}
++
++void llvm::sys::RunInterruptHandlers() { RemoveFilesToRemove(); }
++
++void llvm::sys::SetInterruptFunction(void (*IF)()) {
++  InterruptFunction.exchange(IF);
++}
++
++void llvm::sys::SetInfoSignalFunction(void (*Handler)()) {
++  InfoSignalFunction.exchange(Handler);
++}
++
++void llvm::sys::SetOneShotPipeSignalFunction(void (*Handler)()) {
++  OneShotPipeSignalFunction.exchange(Handler);
++}
++
++void llvm::sys::DefaultOneShotPipeSignalHandler() {
++  // WASI has no SIGPIPE: writing to a closed descriptor just fails.
++}
++
++// The public API
++bool llvm::sys::RemoveFileOnSignal(StringRef Filename, std::string *ErrMsg) {
++  std::lock_guard<std::mutex> Guard(*FilesToRemoveMutex);
++  FilesToRemove->push_back(Filename.str());
++  return false;
++}
++
++// The public API
++void llvm::sys::DontRemoveFileOnSignal(StringRef Filename) {
++  std::lock_guard<std::mutex> Guard(*FilesToRemoveMutex);
++  llvm::erase(*FilesToRemove, Filename.str());
++}
++
++void llvm::sys::AddSignalHandler(sys::SignalHandlerCallback FnPtr,
++                                 void *Cookie) {
++  insertSignalHandler(FnPtr, Cookie);
++}
++
++void llvm::sys::PrintStackTrace(raw_ostream &OS, int Depth) {
++  // There is no unwinder and no symbolizer here; the embedder's own trace (for
++  // a browser, the JS exception carrying the wasm frames) is the useful one.
++}
++
++void llvm::sys::DisableSystemDialogsOnCrash() {}
++
++void llvm::sys::PrintStackTraceOnErrorSignal(StringRef Argv0,
++                                             bool DisableCrashReporting) {
++  // Nothing to hook: a trap never reaches the module.
++}
 diff --git a/llvm/lib/Support/raw_socket_stream.cpp b/llvm/lib/Support/raw_socket_stream.cpp
 index fd1c68167..258e7182a 100644
 --- a/llvm/lib/Support/raw_socket_stream.cpp
