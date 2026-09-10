@@ -45,7 +45,12 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build clang lld python3
+          # The Swift toolchain's own runtime dependencies are needed too: swiftly
+          # installs successfully without them but then exits non-zero.
+          sudo apt-get install -y \
+            cmake ninja-build clang lld python3 \
+            binutils libcurl4-openssl-dev libxml2-dev libncurses-dev \
+            libsqlite3-0 zlib1g-dev tzdata
           # A standalone WASI runtime, so the artifacts are tested the way they are used.
           curl -fsSL https://wasmtime.dev/install.sh | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
