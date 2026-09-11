@@ -37,6 +37,9 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 350
+    # Publishing the release needs write access; nothing else here does.
+    permissions:
+      contents: write
     outputs:
       complete: ${{ steps.pipeline.outputs.complete }}
     steps:
