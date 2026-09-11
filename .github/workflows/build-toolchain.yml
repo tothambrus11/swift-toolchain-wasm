@@ -70,8 +70,16 @@ jobs:
 
       # Sources are large and immutable for a given Swift release: cache them separately
       # from the build trees so a cache eviction does not force a re-clone of LLVM.
+      # Sources are large and immutable for a given Swift release, but they also matter
+      # more than they look: ninja compares mtimes, and a fresh `git clone` stamps every
+      # file with the current time. A restored build tree without its matching source
+      # tree therefore looks entirely out of date, and the compiler is rebuilt from
+      # scratch — hours of work — however good the build cache is. Like the build trees,
+      # these must be saved even when the run fails, or a string of failing runs never
+      # manages to cache them at all. That is exactly what happened here: every run
+      # re-cloned LLVM and Swift and then rebuilt everything.
       - name: Restore sources
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: src
           key: src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}
@@ -108,6 +116,14 @@ jobs:
 
       # Deliberately after the build and before anything else: a failed stage must not
       # discard the compiled tree, or every retry pays the full rebuild again.
+      - name: Save sources
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: src
+          key: src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}
+        continue-on-error: true
+
       - name: Save build trees
         if: always()
         uses: actions/cache/save@v4
