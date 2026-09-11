@@ -21,23 +21,32 @@ apply_series() {
   [[ ${#patches[@]} -gt 0 ]] || { log "no ${name} patches"; return 0; }
   [[ -d "${repo}/.git" ]] || { warn "skipping ${name}: ${repo} is not a checkout"; return 0; }
 
-  # The source caches in CI are restored with the *previous* run's patches already
-  # applied. A changed series then applies neither forwards (it is partly there) nor in
-  # reverse (it is not all there), and the build dies on a stale cache. These checkouts
-  # hold nothing but upstream plus this series, so resetting first is safe and makes the
-  # stage idempotent.
+  # A cached source tree already carries the previous run's patches. Reapplying them
+  # rewrites those files and moves their mtimes, and one of them is Identifier.h, which
+  # is included across the compiler — so ninja then rebuilds almost everything to
+  # reproduce a tree it already had. That turned every retry into a four-hour build.
+  # Check first, and touch nothing when the series is already exactly what is applied.
+  local patch base all_applied=1
+  for patch in "${patches[@]}"; do
+    git -C "$repo" apply --reverse --check "$patch" >/dev/null 2>&1 || { all_applied=0; break; }
+  done
+  if (( all_applied )); then
+    log "${name}: series already applied, leaving the tree untouched"
+    return 0
+  fi
+
+  # The series is not what is in the tree — either nothing is applied, or a cached tree
+  # carries an older series. Reset so a changed series applies to a clean checkout
+  # instead of on top of the previous one.
   if ! git -C "$repo" diff --quiet 2>/dev/null; then
-    log "resetting ${name} checkout before applying the series"
+    log "resetting ${name} checkout: the series differs from what is applied"
     git -C "$repo" checkout -- . 2>/dev/null || true
     git -C "$repo" clean -fdq -- "*.inc" 2>/dev/null || true
   fi
 
-  local patch base
   for patch in "${patches[@]}"; do
     base="$(basename "$patch")"
-    if git -C "$repo" apply --reverse --check "$patch" >/dev/null 2>&1; then
-      log "already applied: ${name}/${base}"
-    elif git -C "$repo" apply --check "$patch" >/dev/null 2>&1; then
+    if git -C "$repo" apply --check "$patch" >/dev/null 2>&1; then
       git -C "$repo" apply "$patch"
       log "applied: ${name}/${base}"
     else
