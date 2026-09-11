@@ -21,6 +21,17 @@ apply_series() {
   [[ ${#patches[@]} -gt 0 ]] || { log "no ${name} patches"; return 0; }
   [[ -d "${repo}/.git" ]] || { warn "skipping ${name}: ${repo} is not a checkout"; return 0; }
 
+  # The source caches in CI are restored with the *previous* run's patches already
+  # applied. A changed series then applies neither forwards (it is partly there) nor in
+  # reverse (it is not all there), and the build dies on a stale cache. These checkouts
+  # hold nothing but upstream plus this series, so resetting first is safe and makes the
+  # stage idempotent.
+  if ! git -C "$repo" diff --quiet 2>/dev/null; then
+    log "resetting ${name} checkout before applying the series"
+    git -C "$repo" checkout -- . 2>/dev/null || true
+    git -C "$repo" clean -fdq -- "*.inc" 2>/dev/null || true
+  fi
+
   local patch base
   for patch in "${patches[@]}"; do
     base="$(basename "$patch")"

@@ -12,11 +12,31 @@
 # by hand to confirm it links and the program runs.
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-: "${SDK_BUNDLE:=${HOME}/.swiftpm/swift-sdks/${SWIFT_TAG}_wasm.artifactbundle/${SWIFT_TAG}_wasm/wasm32-unknown-wasip1}"
+# Locate the installed wasm SDK rather than assuming one path. SwiftPM's layout has
+# moved before, and a hardcoded guess fails with "not installed" even when the SDK is
+# sitting right there — which is exactly how this stage failed in CI while succeeding
+# locally. Search for the WASI.sdk directory and report what was actually found.
+if [[ -z "${SDK_BUNDLE:-}" ]]; then
+  for root in "${HOME}/.swiftpm/swift-sdks" "${HOME}/.local/share/swiftpm/swift-sdks"; do
+    [[ -d "$root" ]] || continue
+    found="$(find "$root" -maxdepth 5 -type d -name WASI.sdk -print -quit 2>/dev/null || true)"
+    if [[ -n "$found" ]]; then
+      SDK_BUNDLE="$(dirname "$found")"
+      break
+    fi
+  done
+fi
 STAGE="${TC_BUILD}/sysroot"
 
-[[ -d "${SDK_BUNDLE}/WASI.sdk" ]] ||
+if [[ -z "${SDK_BUNDLE:-}" || ! -d "${SDK_BUNDLE}/WASI.sdk" ]]; then
+  warn "searched ${HOME}/.swiftpm/swift-sdks and ${HOME}/.local/share/swiftpm/swift-sdks"
+  if command -v swift >/dev/null; then
+    warn "swift sdk list reports:"
+    swift sdk list >&2 || true
+  fi
   die "wasm SDK not installed; see docs/pipeline.md (swift sdk install …)"
+fi
+log "using wasm SDK at ${SDK_BUNDLE}"
 
 rm -rf "$STAGE"
 mkdir -p "${STAGE}/wasi-sysroot" "${STAGE}/swift/lib"
