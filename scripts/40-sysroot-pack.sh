@@ -12,36 +12,41 @@
 # by hand to confirm it links and the program runs.
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-# Locate the installed wasm SDK rather than assuming one path. SwiftPM's layout has
-# moved before, and a hardcoded guess fails with "not installed" even when the SDK is
-# sitting right there — which is exactly how this stage failed in CI while succeeding
-# locally. Search for the WASI.sdk directory and report what was actually found.
+# Get the wasm SDK bundle ourselves rather than hunting for what `swift sdk install`
+# did with it.
+#
+# Three CI runs died here with "wasm SDK not installed" while `swift sdk list` printed
+# the SDK happily in the very next line — SwiftPM knows where it put the bundle, and
+# every guess at that path (two locations, then four, then following symlinks) was
+# wrong on the runner and right on my machine. The bundle is a plain tarball at a URL
+# this repository already pins, with a checksum it already knows, so downloading and
+# extracting it is deterministic and removes the guessing entirely. It lands in the
+# cached sources directory, so CI pays for it once.
+SDK_ROOT="${TC_SRC}/swift-wasm-sdk"
+
 if [[ -z "${SDK_BUNDLE:-}" ]]; then
-  # -L matters: SwiftPM's SDK directory can be reached through a symlink, and plain
-  # `find` will not descend one. CI reported "not installed" while `swift sdk list`
-  # listed the SDK happily, which is what that looks like from the outside.
-  for root in \
-    "${HOME}/.swiftpm/swift-sdks" \
-    "${HOME}/.local/share/swiftpm/swift-sdks" \
-    "${HOME}/Library/org.swift.swiftpm/swift-sdks" \
-    "$HOME"; do
-    [[ -d "$root" ]] || continue
-    found="$(find -L "$root" -maxdepth 6 -type d -name WASI.sdk -print -quit 2>/dev/null || true)"
-    if [[ -n "$found" ]]; then
-      SDK_BUNDLE="$(dirname "$found")"
-      break
+  if [[ ! -d "$SDK_ROOT" ]]; then
+    log "downloading the wasm SDK bundle (${SWIFT_TAG})"
+    tmp="$(mktemp -d)"
+    curl -fsSL --retry 3 -o "${tmp}/wasm-sdk.tar.gz" "$SWIFT_WASM_SDK_URL"
+    actual="$(sha256sum "${tmp}/wasm-sdk.tar.gz" | cut -d' ' -f1)"
+    if [[ "$actual" != "$SWIFT_WASM_SDK_CHECKSUM" ]]; then
+      rm -rf "$tmp"
+      die "wasm SDK checksum mismatch: expected ${SWIFT_WASM_SDK_CHECKSUM}, got ${actual}"
     fi
-  done
+    mkdir -p "$SDK_ROOT"
+    tar -xzf "${tmp}/wasm-sdk.tar.gz" -C "$SDK_ROOT"
+    rm -rf "$tmp"
+  fi
+  SDK_BUNDLE="$(dirname "$(find -L "$SDK_ROOT" -maxdepth 5 -type d -name WASI.sdk -print -quit)")"
 fi
+
 STAGE="${TC_BUILD}/sysroot"
 
 if [[ -z "${SDK_BUNDLE:-}" || ! -d "${SDK_BUNDLE}/WASI.sdk" ]]; then
-  warn "searched ${HOME}/.swiftpm/swift-sdks and ${HOME}/.local/share/swiftpm/swift-sdks"
-  if command -v swift >/dev/null; then
-    warn "swift sdk list reports:"
-    swift sdk list >&2 || true
-  fi
-  die "wasm SDK not installed; see docs/pipeline.md (swift sdk install …)"
+  warn "no WASI.sdk under ${SDK_ROOT}; its contents are:"
+  find -L "$SDK_ROOT" -maxdepth 3 >&2 2>/dev/null || true
+  die "wasm SDK bundle did not contain a WASI.sdk directory"
 fi
 log "using wasm SDK at ${SDK_BUNDLE}"
 
