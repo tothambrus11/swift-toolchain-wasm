@@ -46,6 +46,11 @@ Requirements: Linux x86_64, ~40 GB disk, cmake, ninja, a host C++ compiler, and 
 toolchain with the matching wasm SDK (Stage 40 takes the sysroot from the official SDK
 bundle). See [docs/porting.md](docs/porting.md).
 
+Every patch here has been audited against upstream `main` — four of them have since been
+fixed upstream, two are latent bugs nobody has reported, and one has an accepted upstream
+fix that only needs porting from Emscripten to WASI. See
+[docs/upstream-status.md](docs/upstream-status.md).
+
 ## What had to be fixed
 
 Building the Swift compiler for a wasm host surfaced three upstream bugs and one design

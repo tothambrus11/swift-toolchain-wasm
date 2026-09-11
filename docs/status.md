@@ -67,7 +67,14 @@ exercise. It is warned about, not treated as a wasm regression.
   because the compiler's own Swift modules need C++ interop and interop is broken for
   `wasm32-unknown-wasip1` in the stock Swift 6.3.3 SDK: any C++ module import hits a Clang
   module cycle, `SwiftWASILibc -> std_inttypes_h -> SwiftWASILibc`. That reproduces with a
-  two-line Swift file against the stock SDK, so it is upstream.
+  two-line Swift file against the stock SDK, so it is upstream. Upstream has since fixed
+  the identical cycle for the Emscripten libc module — `[no_undeclared_includes]` plus
+  moving `complex.h` into a submodule, [swift#90332] — and has not applied it to
+  `wasi-libc.modulemap`, which still reads `module SwiftWASILibc [system]` on both `main`
+  and `release/6.3`. Porting those two lines is the way out of this limit; see
+  [upstream-status.md](upstream-status.md).
+
+[swift#90332]: https://github.com/swiftlang/swift/pull/90332
 * **4 GiB of address space.** Single-file compiles fit comfortably; whole-module builds of
   large packages may not.
 * **Size.** ~300 MiB of artifacts on a cold load, before compression.
