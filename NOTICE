@@ -1,0 +1,32 @@
+Yukibana wasm Swift toolchain
+=============================
+
+The artifacts published by this repository — swift-frontend.wasm, wasm-ld.wasm and
+swift-sysroot-core.tar — are builds of third-party software, not original works of this
+project. This file records what they contain and the terms they carry, as those licenses
+require of anyone redistributing them.
+
+swift-frontend.wasm
+  Built from the Swift compiler (https://github.com/swiftlang/swift) and LLVM
+  (https://github.com/swiftlang/llvm-project), with the patch series in patches/.
+  Copyright (c) Apple Inc. and the Swift project authors.
+  Copyright (c) LLVM Project contributors.
+  Licensed under the Apache License, Version 2.0, with the LLVM Exception.
+
+wasm-ld.wasm
+  Built from LLVM's lld linker, same source and terms as above.
+
+swift-sysroot-core.tar
+  Contains the Swift standard library for wasm32-unknown-wasip1, taken from the official
+  Swift SDK for WebAssembly published on swift.org, together with wasi-libc and the
+  compiler-rt builtins from the WASI SDK (https://github.com/WebAssembly/wasi-sdk).
+  Swift standard library: Apache-2.0 with the Runtime Library Exception.
+  wasi-libc: Apache-2.0 with the LLVM Exception, MIT, and BSD-2-Clause components.
+  compiler-rt builtins: Apache-2.0 with the LLVM Exception.
+
+Full license texts ship inside swift-sysroot-core.tar where the upstream projects
+include them, and are available from each project's repository.
+
+The build scripts, patches and documentation in this repository are licensed under
+Apache-2.0 with the LLVM Exception, matching the projects they patch, so the patches can
+be contributed upstream without a license change.
