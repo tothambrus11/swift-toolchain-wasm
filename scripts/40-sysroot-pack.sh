@@ -17,9 +17,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 # sitting right there — which is exactly how this stage failed in CI while succeeding
 # locally. Search for the WASI.sdk directory and report what was actually found.
 if [[ -z "${SDK_BUNDLE:-}" ]]; then
-  for root in "${HOME}/.swiftpm/swift-sdks" "${HOME}/.local/share/swiftpm/swift-sdks"; do
+  # -L matters: SwiftPM's SDK directory can be reached through a symlink, and plain
+  # `find` will not descend one. CI reported "not installed" while `swift sdk list`
+  # listed the SDK happily, which is what that looks like from the outside.
+  for root in \
+    "${HOME}/.swiftpm/swift-sdks" \
+    "${HOME}/.local/share/swiftpm/swift-sdks" \
+    "${HOME}/Library/org.swift.swiftpm/swift-sdks" \
+    "$HOME"; do
     [[ -d "$root" ]] || continue
-    found="$(find "$root" -maxdepth 5 -type d -name WASI.sdk -print -quit 2>/dev/null || true)"
+    found="$(find -L "$root" -maxdepth 6 -type d -name WASI.sdk -print -quit 2>/dev/null || true)"
     if [[ -n "$found" ]]; then
       SDK_BUNDLE="$(dirname "$found")"
       break

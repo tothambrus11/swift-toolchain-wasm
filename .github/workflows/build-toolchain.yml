@@ -80,7 +80,8 @@ jobs:
       # resumable: a run that timed out leaves a partial tree under a stale key, and the
       # next run picks it up and continues.
       - name: Restore build trees
-        uses: actions/cache@v4
+        id: build-cache
+        uses: actions/cache/restore@v4
         with:
           path: build
           key: build-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-${{ github.run_id }}
@@ -104,6 +105,15 @@ jobs:
             echo "::error::Build failed. See build.log."
             exit 1
           fi
+
+      # Deliberately after the build and before anything else: a failed stage must not
+      # discard the compiled tree, or every retry pays the full rebuild again.
+      - name: Save build trees
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: build
+          key: build-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-${{ github.run_id }}
 
       - name: Smoke-test the toolchain
         if: steps.pipeline.outputs.complete == 'true'
