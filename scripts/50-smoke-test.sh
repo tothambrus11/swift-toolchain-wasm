@@ -20,7 +20,7 @@ done
 [[ -n "$runtime" ]] || die "no WASI runtime found (install wasmtime)"
 
 rm -rf "$WORK"
-mkdir -p "${SYSROOT}" "${WORK}/src" "${WORK}/build"
+mkdir -p "${SYSROOT}" "${WORK}/src" "${WORK}/build" "${WORK}/mcache"
 tar -xf "${TC_OUT}/swift-sysroot-core.tar" -C "$SYSROOT"
 
 cat > "${WORK}/src/main.swift" <<'SWIFT'
@@ -29,17 +29,28 @@ print("squares: \(squares)")
 SWIFT
 
 # The tools see one directory tree, exactly as they will in the browser's VirtualFS.
+#
+# No `--` before the guest arguments: wasmtime 48 passes that separator through to the
+# guest rather than consuming it, so `swift-frontend` would see argv[1] == "--" instead
+# of "-frontend", silently fall back to driver mode, and fail with the useless
+# "unsupported target OS: ''". Everything after the module path already reaches the
+# guest verbatim, hyphens and all.
 run_tool() {
   local tool="$1"; shift
-  "$runtime" run --dir "${WORK}::/work" --dir "${SYSROOT}::/sysroot" "${TC_OUT}/${tool}" -- "$@"
+  "$runtime" run --dir "${WORK}::/work" --dir "${SYSROOT}::/sysroot" "${TC_OUT}/${tool}" "$@"
 }
 
+# SwiftShims is built implicitly, which needs a writable module cache. Only /work and
+# /sysroot are preopened here, so the default cache location is unreachable and the
+# frontend reports "module 'SwiftShims' is needed but has not been provided". The
+# browser does not hit this: its VirtualFS root is writable.
 log "compiling with swift-frontend.wasm"
 run_tool swift-frontend.wasm \
   -frontend -c -primary-file /work/src/main.swift \
   -target wasm32-unknown-wasip1 -disable-objc-interop \
   -sdk /sysroot/wasi-sysroot \
   -resource-dir /sysroot/swift/lib/swift_static -use-static-resource-dir \
+  -module-cache-path /work/mcache \
   -no-color-diagnostics -empty-abi-descriptor \
   -module-name main -o /work/build/main.o
 
