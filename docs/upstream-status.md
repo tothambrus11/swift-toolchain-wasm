@@ -151,6 +151,31 @@ worked example of the other branch of that argument, and is worth posting as one
 | `clang/tools/CMakeLists.txt`, `llvm/tools/libCASPluginTest/CMakeLists.txt` | Skip tools that need a JIT or a shared library. |
 | `clang/lib/Interpreter/RemoteJITUtils.cpp` | **The file no longer exists** on `llvm/llvm-project` `main` or `swiftlang/llvm-project` `next`. This hunk is dead on rebase. |
 
+## The "no macros" limit has an upstream track too
+
+`docs/status.md` lists macros and compiler plugins as impossible here, because plugins are
+spawned executables and WASI cannot spawn anything. Two upstream changes bear on that:
+
+* [swift#73725] "[Macros] In-process plugin server" (rintaro, merged 2024-06-26) removed
+  the *spawn* requirement for the common case — the plugin server is loaded into the
+  compiler's own process. It does not help a wasm host by itself, because loading it means
+  `dlopen`ing `libSwiftInProcPluginServer.so`, and wasm modules are not dynamic libraries.
+  (Our `lib/Driver/ToolChains.cpp` patch already teaches the path logic about this file on
+  a WASI host; the loading is what is missing.)
+* [swift#73031] "[Macros] Add support for wasm macros" (kabiroberai, later carried by
+  MaxDesiatov) makes macro plugins themselves `.wasm` modules, executed by WasmKit inside
+  `swift-plugin-server`. Approved by DougGregor and kateinoigakukun, still a draft as of
+  June 2026. This is the shape that eventually works for us — with one twist: a
+  wasm-*hosted* compiler cannot embed WasmKit sensibly (a wasm interpreter inside wasm),
+  so the execution would want to be an import the embedder satisfies with the host's own
+  `WebAssembly` API. That is a genuinely new piece of design, not a patch.
+
+Neither is a blocker to fix; both are worth watching, and the second is where to push if
+macros ever become a requirement for the IDE.
+
+[swift#73725]: https://github.com/swiftlang/swift/pull/73725
+[swift#73031]: https://github.com/swiftlang/swift/pull/73031
+
 ## What this means for the plan
 
 1. **Rebasing onto `main` removes four Swift patches outright** (Address.h,
