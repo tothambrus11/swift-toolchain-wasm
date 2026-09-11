@@ -51,18 +51,6 @@ index db0b0afc..0e3cd7bf 100644
      Identifier moduleSelector;   // Note: currently can never be empty().
      DeclName fullName;
  
-diff --git a/lib/AST/ASTMangler.cpp b/lib/AST/ASTMangler.cpp
-index e8794a2b..b7f97d1a 100644
---- a/lib/AST/ASTMangler.cpp
-+++ b/lib/AST/ASTMangler.cpp
-@@ -2192,6 +2192,7 @@ void ASTMangler::appendRetroactiveConformances(SubstitutionMap subMap,
-     if (conformance.isInvalid())
-       continue;
- 
-+
-     if (conformance.getProtocol()->isMarkerProtocol())
-       continue;
- 
 diff --git a/lib/AST/AbstractConformance.h b/lib/AST/AbstractConformance.h
 index e305d7c0..42828b6c 100644
 --- a/lib/AST/AbstractConformance.h
