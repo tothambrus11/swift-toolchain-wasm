@@ -58,18 +58,21 @@ jobs:
           curl -fsSL https://wasmtime.dev/install.sh | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
-      - name: Install Swift ${{ env.SWIFT_VERSION }} and the wasm SDK
+      # The native toolchain only. `swift sdk install` used to run here too, but nothing
+      # needs it any more: Stage 40 fetches and checksums the wasm SDK artifactbundle
+      # itself, precisely because locating what `swift sdk install` had unpacked proved
+      # unreliable. Keeping the call cost a redundant ~700 MB download and one more way
+      # to fail — run #11 died in it, crashing inside URLSession._MultiHandle.deinit
+      # (libcurl teardown) after the same step had succeeded in runs #8, #9 and #10.
+      - name: Install Swift ${{ env.SWIFT_VERSION }}
         run: |
-          # Needed for Stage 40 (the sysroot comes out of the official SDK bundle) and
-          # for building the example programs the artifacts are smoke-tested against.
+          # Stage 30 builds against this toolchain (SWIFT_NATIVE_CLANG_TOOLS_PATH), and
+          # the smoke test's example programs are built with it.
           curl -fsSL -o swiftly.tar.gz https://download.swift.org/swiftly/linux/swiftly-x86_64.tar.gz
           tar -xzf swiftly.tar.gz
           ./swiftly init -y --skip-install
           . "$HOME/.local/share/swiftly/env.sh"
           swiftly install "$SWIFT_VERSION" --use
-          swift sdk install \
-            "https://download.swift.org/swift-${SWIFT_VERSION}-release/wasm-sdk/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE_wasm.artifactbundle.tar.gz" \
-            --checksum "${{ vars.SWIFT_WASM_SDK_CHECKSUM || 'cabfa08b73bb8ac783927ecd15fa386e99d0c139c5f232445067bcf58379cae7' }}"
 
       # Sources are large and immutable for a given Swift release: cache them separately
       # from the build trees so a cache eviction does not force a re-clone of LLVM.
