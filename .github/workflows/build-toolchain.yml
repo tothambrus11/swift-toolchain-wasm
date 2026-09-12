@@ -163,6 +163,13 @@ jobs:
         if: steps.pipeline.outputs.complete == 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release)
         uses: softprops/action-gh-release@v2
         with:
+          # A workflow_dispatch run has no tag of its own, and the action refuses to
+          # publish without one ("GitHub Releases requires a tag"). Use one stable tag
+          # per Swift release: rebuilding replaces the artifacts in place, so consumers
+          # pointing at releases/latest/download keep working across rebuilds.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('swift-{0}-wasm', env.SWIFT_VERSION) }}
+          name: Swift ${{ env.SWIFT_VERSION }} toolchain for WebAssembly hosts
+          make_latest: true
           files: out/*
           fail_on_unmatched_files: true
           body: |
