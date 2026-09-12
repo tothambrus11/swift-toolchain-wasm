@@ -144,9 +144,11 @@ jobs:
         if: steps.pipeline.outputs.complete == 'true'
         run: |
           # Serve-ready: browsers fetch these over the network, so ship them compressed.
+          # -f because Stage 40 already writes swift-sysroot-core.tar.gz itself, and
+          # plain `gzip -k` refuses to overwrite an existing .gz and exits 2.
           for f in out/*.wasm out/*.tar; do
             [ -f "$f" ] || continue
-            gzip -9 -k "$f"
+            gzip -9 -kf "$f"
           done
           ls -la out
 
