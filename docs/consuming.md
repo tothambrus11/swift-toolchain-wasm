@@ -1,7 +1,22 @@
 # Consuming the artifacts from a web app
 
-The artifacts are plain static files. A page needs three of them and a way to run WASI
-command modules over a shared in-memory filesystem.
+The artifacts are plain static files, published on the
+[`swift-6.3.3-wasm` release](https://github.com/tothambrus11/swift-toolchain-wasm/releases/tag/swift-6.3.3-wasm)
+alongside a `.gz` of each — 69 MiB over the wire instead of 302 MiB. `latest` follows a
+rebuild of the same Swift release:
+
+```
+https://github.com/tothambrus11/swift-toolchain-wasm/releases/latest/download/swift-frontend.wasm.gz
+```
+
+Release assets carry no `Access-Control-Allow-Origin` and are served as
+`application/octet-stream`, so a page cannot fetch them directly and
+`WebAssembly.compileStreaming` would reject them anyway. Proxy them through your own
+origin, setting `application/wasm` yourself; `packages/ide/src/worker.js` in the Yukibana
+repository is one such proxy, in about sixty lines.
+
+A page needs three of them and a way to run WASI command modules over a shared in-memory
+filesystem.
 
 ```
 /toolchain/swift-frontend.wasm
