@@ -12,6 +12,7 @@ browser tab can compile Swift with no server, the way
 | File | What |
 | --- | --- |
 | `swift-frontend.wasm` | the Swift compiler frontend, running on wasm |
+| `swift-ide-test.wasm` | code completion, cursor info and AST/module printing, running on wasm |
 | `wasm-ld.wasm` | LLVM's wasm linker, running on wasm |
 | `swift-sysroot-core.tar` | stdlib modules, archives, `swiftrt.o`, compiler-rt and wasi-libc |
 
@@ -39,6 +40,7 @@ workflow saves its build trees and resumes on the next run.
 | `15-cmark-wasm` | cmark-gfm for the wasm host |
 | `20-llvm-wasm` | LLVM + clang libraries + `wasm-ld.wasm` (hours) |
 | `30-swift-frontend-wasm` | `swift-frontend.wasm` |
+| `35-swift-ide-test-wasm` | `swift-ide-test.wasm` |
 | `40-sysroot-pack` | the browser sysroot tarball |
 | `50-smoke-test` | compiles, links and runs a Swift program using only the wasm tools |
 

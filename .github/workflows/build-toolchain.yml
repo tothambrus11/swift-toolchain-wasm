@@ -1,7 +1,7 @@
 name: Build wasm toolchain
 
-# Produces the WebAssembly-hosted Swift toolchain — swift-frontend.wasm, wasm-ld.wasm
-# and the packed sysroot — and publishes them so a web IDE can fetch and run them.
+# Produces the WebAssembly-hosted Swift toolchain — swift-frontend.wasm, swift-ide-test.wasm,
+# wasm-ld.wasm and the packed sysroot — and publishes them so a web IDE can fetch and run them.
 #
 # The build does not fit in one GitHub Actions job: cross-compiling LLVM, clang and the
 # Swift frontend takes several hours, against a six-hour job limit. The workflow is
@@ -181,6 +181,7 @@ jobs:
             | File | What |
             | --- | --- |
             | `swift-frontend.wasm` | the Swift compiler frontend, running on wasm |
+            | `swift-ide-test.wasm` | code completion, cursor info and AST/module printing, running on wasm |
             | `wasm-ld.wasm` | LLVM's wasm linker, running on wasm |
             | `swift-sysroot-core.tar` | stdlib modules, archives and wasi-libc to mount in the browser |
 

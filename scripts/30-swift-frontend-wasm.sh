@@ -16,6 +16,12 @@
 #     wasi-sdk's, and llvm/Support/Mutex.h needs std::recursive_mutex.
 #   * The wasi-libc emulation defines are required, not optional: swift's C++ includes
 #     <signal.h>, which hard-errors without -D_WASI_EMULATED_SIGNAL.
+#   * `tools/swift-ide-test` (Stage 35) is only added as a CMake subdirectory when
+#     SWIFT_INCLUDE_TESTS or SWIFT_INCLUDE_TEST_BINARIES is on. This build turns
+#     SWIFT_INCLUDE_TESTS off (no lit suite, no test/ or unittests/ subtrees) but needs
+#     SWIFT_INCLUDE_TEST_BINARIES on so the swift-ide-test *target* still gets configured
+#     — it links libraries (swiftIDE, swiftIDETool) already built for swift-frontend, so
+#     it costs one more link, not another compile pass.
 #
 # SWIFT_ENABLE_SWIFT_IN_SWIFT is OFF for this first working configuration. The compiler's
 # Swift-implemented modules need C++ interop, and C++ interop is broken for
@@ -90,6 +96,7 @@ cmake -G Ninja -S "${SWIFT_SRC}" -B "$SWIFT_BUILD" \
   -DSWIFT_BUILD_REMOTE_MIRROR=OFF \
   -DSWIFT_BUILD_SOURCEKIT=OFF \
   -DSWIFT_INCLUDE_TESTS=OFF \
+  -DSWIFT_INCLUDE_TEST_BINARIES=ON \
   -DSWIFT_INCLUDE_DOCS=OFF \
   -DSWIFT_BUILD_SWIFT_SYNTAX=OFF \
   -DSWIFT_ENABLE_SWIFT_IN_SWIFT=OFF \

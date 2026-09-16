@@ -9,7 +9,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 WORK="${TC_BUILD}/smoke"
 SYSROOT="${WORK}/sysroot"
 
-for artifact in swift-frontend.wasm wasm-ld.wasm swift-sysroot-core.tar; do
+# swift-ide-test.wasm is only checked for presence here, not exercised: unlike
+# swift-frontend it builds its own CompilerInvocation from a different flag set
+# (no -use-static-resource-dir), and that path hasn't been proven against the packed
+# sysroot yet. Extend this once a real -code-completion invocation is verified.
+for artifact in swift-frontend.wasm swift-ide-test.wasm wasm-ld.wasm swift-sysroot-core.tar; do
   [[ -f "${TC_OUT}/${artifact}" ]] || die "missing ${TC_OUT}/${artifact}"
 done
 
