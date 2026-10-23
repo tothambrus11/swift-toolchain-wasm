@@ -64,8 +64,10 @@ exercise. It is warned about, not treated as a wasm regression.
 **Status: builds in CI on a branch; not yet seen answering.** Stage 35 cross-builds the
 in-process sourcekitd into Stage 30's tree and links `sourcekitd-request.wasm`; Stage 52
 asks it for a completion and a cursor info under wasmtime. Until a run has passed Stage
-52, everything below is the design, verified only as far as a local configure and the
-unit test of the work queues go.
+52, everything below is the design, verified as far as can be without linking: CMake
+configures, every SourceKit, IDETool and Refactoring object compiles for
+`wasm32-wasip1`, every library the link needs is one Stage 20 builds, and the work queues
+pass their unit test under a WASI runtime.
 
 `sourcekitd-request.wasm` sends sourcekitd's YAML requests synchronously and prints the
 responses. The compiler arguments are driver arguments, as an editor sends them:
