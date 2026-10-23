@@ -1,7 +1,8 @@
 name: Build wasm toolchain
 
-# Produces the WebAssembly-hosted Swift toolchain — swift-frontend.wasm, wasm-ld.wasm
-# and the packed sysroot — and publishes them so a web IDE can fetch and run them.
+# Produces the WebAssembly-hosted Swift toolchain — swift-frontend.wasm, wasm-ld.wasm,
+# the packed sysroot and sourcekitd-request.wasm — and publishes them so a web IDE can
+# fetch and run them.
 #
 # The build does not fit in one GitHub Actions job: cross-compiling LLVM, clang and the
 # Swift frontend takes several hours, against a six-hour job limit. The workflow is
@@ -143,6 +144,15 @@ jobs:
           . "$HOME/.local/share/swiftly/env.sh"
           ./scripts/50-smoke-test.sh
 
+      # sourcekitd is new and the toolchain is not: let a failure here still upload
+      # everything (sourcekitd-request.wasm included, to debug with), then fail the job
+      # before anything is published.
+      - name: Smoke-test sourcekitd
+        id: sourcekitd-smoke
+        if: steps.pipeline.outputs.complete == 'true'
+        continue-on-error: true
+        run: ./scripts/52-sourcekitd-smoke-test.sh
+
       - name: Compress artifacts
         if: steps.pipeline.outputs.complete == 'true'
         run: |
@@ -161,6 +171,12 @@ jobs:
           name: swift-toolchain-wasm-${{ env.SWIFT_VERSION }}
           path: out/
           retention-days: 30
+
+      - name: Fail if the sourcekitd smoke test failed
+        if: steps.pipeline.outputs.complete == 'true' && steps.sourcekitd-smoke.outcome != 'success'
+        run: |
+          echo "::error::sourcekitd-request.wasm did not answer completion and cursor info; see the 'Smoke-test sourcekitd' step."
+          exit 1
 
       - name: Publish release
         if: steps.pipeline.outputs.complete == 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release)
@@ -183,6 +199,7 @@ jobs:
             | `swift-frontend.wasm` | the Swift compiler frontend, running on wasm |
             | `wasm-ld.wasm` | LLVM's wasm linker, running on wasm |
             | `swift-sysroot-core.tar` | stdlib modules, archives and wasi-libc to mount in the browser |
+            | `sourcekitd-request.wasm` | in-process sourcekitd with a minimal driver: YAML requests in, responses out |
 
             Serve these next to a page and point a `WasmBackend` at the directory.
 

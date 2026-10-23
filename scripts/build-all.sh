@@ -13,6 +13,7 @@ STAGES=(
   15-cmark-wasm
   20-llvm-wasm
   30-swift-frontend-wasm
+  35-sourcekitd-wasm
   40-sysroot-pack
   55-check-alignment-contracts
 )

@@ -38,4 +38,15 @@ else
     https://github.com/swiftlang/swift-cmark.git "${TC_SRC}/swift-cmark"
 fi
 
+# Stage 35 input: SourceKit on WASI needs the Blocks runtime, which lives in
+# libdispatch's sources. Nothing else of libdispatch is built.
+if [[ -f "${TC_SRC}/swift-corelibs-libdispatch/src/BlocksRuntime/runtime.c" ]]; then
+  log "swift-corelibs-libdispatch already present"
+else
+  log "cloning swiftlang/swift-corelibs-libdispatch @ ${SWIFT_TAG} (shallow)"
+  git clone --depth 1 --branch "$SWIFT_TAG" --single-branch \
+    https://github.com/swiftlang/swift-corelibs-libdispatch.git \
+    "${TC_SRC}/swift-corelibs-libdispatch"
+fi
+
 log "sources ready"

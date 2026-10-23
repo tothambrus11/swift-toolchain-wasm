@@ -7,7 +7,8 @@
 #            signals, sockets, resource limits, setjmp. All guarded on __wasi__ so a
 #            native build of the same tree is unaffected.
 #   swift/ — build-system assumptions that break when the host stdlib comes prebuilt
-#            from an SDK rather than being built in-tree.
+#            from an SDK rather than being built in-tree, and, for SourceKit, the
+#            libdispatch, dladdr and dynamic linking a WASI host does not have.
 #
 # They are deliberately small, so they stay upstreamable.
 # Idempotent: patches already applied are skipped.
@@ -38,10 +39,29 @@ apply_series() {
   # The series is not what is in the tree — either nothing is applied, or a cached tree
   # carries an older series. Reset so a changed series applies to a clean checkout
   # instead of on top of the previous one.
-  if ! git -C "$repo" diff --quiet 2>/dev/null; then
+  #
+  # Resetting and reapplying rewrites every patched file, though, and the same
+  # Identifier.h problem as above would turn adding one hunk anywhere in the series into
+  # a full compiler rebuild. So remember what each touched file held and when it was
+  # last modified, and afterwards give every file that came out byte-identical its old
+  # mtime back. Ninja then rebuilds what the new series actually changed, and nothing
+  # else. Files the series creates are untracked, so they are recorded and removed too.
+  local before
+  before="$(mktemp)"
+  {
+    git -C "$repo" diff --name-only -z 2>/dev/null
+    git -C "$repo" ls-files --others --exclude-standard -z 2>/dev/null
+  } | while IFS= read -r -d '' file; do
+    [[ -f "${repo}/${file}" ]] || continue
+    printf '%s\t%s\t%s\n' "$(sha1sum < "${repo}/${file}" | cut -d' ' -f1)" \
+      "$(stat -c '%.9Y' "${repo}/${file}")" "$file"
+  done > "$before"
+
+  if [[ -s "$before" ]]; then
     log "resetting ${name} checkout: the series differs from what is applied"
     git -C "$repo" checkout -- . 2>/dev/null || true
-    git -C "$repo" clean -fdq -- "*.inc" 2>/dev/null || true
+    git -C "$repo" ls-files --others --exclude-standard -z |
+      (cd "$repo" && xargs -0 -r rm -f --)
   fi
 
   for patch in "${patches[@]}"; do
@@ -53,6 +73,20 @@ apply_series() {
       die "cannot apply ${name}/${base} to ${repo}"
     fi
   done
+
+  local hash mtime file kept=0 changed=0
+  while IFS=$'\t' read -r hash mtime file; do
+    if [[ -f "${repo}/${file}" &&
+          "$(sha1sum < "${repo}/${file}" | cut -d' ' -f1)" == "$hash" ]]; then
+      touch -m -d "@${mtime}" "${repo}/${file}"
+      kept=$((kept + 1))
+    else
+      changed=$((changed + 1))
+    fi
+  done < "$before"
+  rm -f "$before"
+  (( kept + changed == 0 )) ||
+    log "${name}: ${kept} files unchanged by the new series kept their mtimes; ${changed} changed"
 }
 
 apply_series llvm "$LLVM_SRC"
