@@ -470,10 +470,10 @@ index 4589f518..647c7c91 100644
  public:
    explicit ActiveAllocation(SILInstruction *value)
 diff --git a/tools/SourceKit/CMakeLists.txt b/tools/SourceKit/CMakeLists.txt
-index 73b79d13..780c1a6d 100644
+index 73b79d13..9c445cf5 100644
 --- a/tools/SourceKit/CMakeLists.txt
 +++ b/tools/SourceKit/CMakeLists.txt
-@@ -91,6 +91,27 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+@@ -91,6 +91,31 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
    string(TOUPPER "${CMAKE_SYSTEM_NAME}" SOURCEKIT_DEFAULT_TARGET_SDK)
  endif()
  
@@ -496,6 +496,10 @@ index 73b79d13..780c1a6d 100644
 +  # SourceKitSupport links it publicly and is exported from the build tree,
 +  # so it has to be exported alongside.
 +  set_property(GLOBAL APPEND PROPERTY SWIFT_BUILDTREE_EXPORTS BlocksRuntime)
++  # Most of SourceKit includes <Block.h> without linking SourceKitSupport
++  # directly. Elsewhere Libdispatch.cmake puts the headers on every include
++  # path; here they go on SourceKit's alone.
++  include_directories(AFTER "${SOURCEKIT_BLOCKS_RUNTIME_SOURCE}")
 +endif()
 +
  if(SWIFT_BUILD_HOST_DISPATCH)
