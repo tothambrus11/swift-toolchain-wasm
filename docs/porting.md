@@ -14,7 +14,9 @@ rediscovering it one compile error at a time.
 | `getrlimit`/`setrlimit` | No stack or memory limits to query; the linker's `-z stack-size` sets the stack instead. |
 | The user database (`pwd.h`, `getpwuid`) | No home directory beyond `$HOME`, no `~user` expansion. |
 | Unix domain sockets (`sockaddr_un.sun_path`) | Nothing can listen; dependency-scanning daemons are out. |
-| `dladdr`, `/proc` | A module cannot find its own path; `argv[0]` is all there is. |
+| `dladdr`, `/proc` | A module cannot find its own path; `argv[0]` is all there is. wasi-libc *declares* `dladdr` but does not define it, so code that calls it compiles and then fails to link. |
+| Threads (in `wasm32-wasip1`) | No libdispatch — it has no WASI port, and needs threads. Anything built on queues has to run its work on the caller's thread (see SourceKit in [status.md](status.md#sourcekitd)). |
+| Dynamic linking | Libraries are static; a `SHARED` CMake target has to become a static one. |
 | Terminal ioctls, `umask`, `fchown` | No terminal width, no permission mask, no file ownership. |
 
 ## Consequences for the design

@@ -59,6 +59,64 @@ That script also reports that **`swift::SILFunctionType` violates its contract o
 host, 64-bit included** — a pre-existing upstream inconsistency that nothing appears to
 exercise. It is warned about, not treated as a wasm regression.
 
+## sourcekitd
+
+**Status: builds in CI on a branch; not yet seen answering.** Stage 35 cross-builds the
+in-process sourcekitd into Stage 30's tree and links `sourcekitd-request.wasm`; Stage 52
+asks it for a completion and a cursor info under wasmtime. Until a run has passed Stage
+52, everything below is the design, verified only as far as a local configure and the
+unit test of the work queues go.
+
+`sourcekitd-request.wasm` sends sourcekitd's YAML requests synchronously and prints the
+responses. The compiler arguments are driver arguments, as an editor sends them:
+
+```
+{
+  key.request: source.request.codecomplete,
+  key.sourcefile: "/work/main.swift",
+  key.offset: 42,
+  key.compilerargs: ["/work/main.swift", "-target", "wasm32-unknown-wasip1",
+                     "-sdk", "/sysroot/wasi-sysroot",
+                     "-resource-dir", "/sysroot/swift/lib/swift_static",
+                     "-module-cache-path", "/work/mcache"]
+}
+```
+
+```
+wasmtime run --dir work::/work --dir sysroot::/sysroot sourcekitd-request.wasm /work/complete.yaml
+```
+
+What SourceKit assumes that `wasm32-wasip1` lacks, and what the patch series does instead
+(all of it WASI-only, so a native build of the same tree is unaffected):
+
+| Assumes | Instead |
+| --- | --- |
+| libdispatch, on threads | `Concurrency-cooperative.cpp`: `WorkQueue`/`Semaphore` queue work and run it, in submission order, when somebody waits. Serial queues, barriers and suspension keep their meaning; a wait nothing can satisfy is reported, not hung. No libdispatch is built. |
+| The Blocks runtime (the C API's callbacks are blocks) | Built alone from libdispatch's `src/BlocksRuntime`: two portable C files. |
+| `dladdr`, to find the toolchain next to the library | `$SOURCEKITD_TOOLCHAIN_PREFIX`, default `/usr`. Requests normally pass `-resource-dir` anyway. |
+| A shared `sourcekitdInProc` | A static one. |
+| `dispatch_after`, for `SOURCEKIT_DELAY_SEMA_EDITOR` | Ignored, with a log line. |
+| `sourcekitd-test` (spawns, threads, `dispatch_main`) | `sourcekitd-request`, about a hundred lines. |
+
+Why `wasm32-wasip1` and not `wasm32-wasip1-threads`: sourcekitd links against the same
+LLVM, clang and Swift libraries as `swift-frontend.wasm`, which are single-threaded
+`wasip1` objects. A shared-memory module cannot link them — every object would need
+atomics — so the threads target means building the whole toolchain a second time, and
+libdispatch would still need a WASI port before it could use the threads. It would also
+make the page require cross-origin isolation, which the compiler does not.
+
+What single-threaded costs, and what an embedder has to know:
+
+* **A request blocks its caller until it is answered.** Run sourcekitd in a worker.
+* **Cancellation cannot interrupt a running request:** nothing else runs while it does.
+* **Notifications** (document updates, semantic-info-ready) are queued work like any
+  other. They run when the next request waits, or when the embedder calls
+  `SourceKit::WorkQueue::runPendingWork()`. There is no C entry point for that yet; an
+  embedding through the C API needs one.
+* **A queued item that takes a `std::mutex` its waiter holds traps** (wasi-libc's
+  single-threaded mutex has nothing to wait for). Nothing in the request paths used by
+  completion and cursor info is known to do this, but it is the failure to expect.
+
 ## Known limits
 
 * **Macros and compiler plugins cannot work.** They are spawned executables, and WASI

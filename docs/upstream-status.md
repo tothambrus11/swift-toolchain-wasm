@@ -81,6 +81,28 @@ unqualified `make_unique` and an `llvm::sys::Wait(PI, unsigned, bool, ...)`
 overload that no longer exists. Nothing builds the Default queue on a supported
 platform, so the rot went unnoticed. Two-line fix, unreported upstream.
 
+### SourceKit on a WASI host (added 2026-10-23, not reported)
+
+Twelve files, all new territory: upstream builds no SourceKit for any wasm host. `main`'s
+`cmake/caches/Runtime-WASI-wasm32.cmake` sets `SWIFT_BUILD_SOURCEKIT NO`, and neither
+`tools/SourceKit` nor `SWIFT_BUILD_HOST_DISPATCH` on `main` mentions WASI or Emscripten.
+
+| File | Why |
+| --- | --- |
+| `CMakeLists.txt` | No host libdispatch for WASI. |
+| `tools/SourceKit/CMakeLists.txt` | Builds the Blocks runtime alone from libdispatch's sources. |
+| `tools/SourceKit/lib/Support/CMakeLists.txt`, `Concurrency-cooperative.cpp` (new), `include/SourceKit/Support/Concurrency.h` | Work queues without libdispatch or threads; `runPendingWork()` for embedders. |
+| `tools/SourceKit/tools/sourcekitd/bin/InProc/CMakeLists.txt` | Static `sourcekitdInProc`. |
+| `sourcekitdInProc.cpp`, `sourcekitdAPI-Common.cpp` | No `dladdr`. |
+| `sourcekitd/lib/Service/Requests.cpp` | No `dispatch_after`. |
+| `tools/SourceKit/tools/CMakeLists.txt`, `sourcekitd-request/` (new) | A driver that runs without processes or threads. |
+
+The cooperative queues are the part with a future upstream: libdispatch `main` has
+started on a single-threaded backend of its own (PassiveLogic's "prepare cooperative event
+backend", #953, and "share the main-queue drain with non-Cocoa single-threaded backends"),
+which drains the main queue under `defined(__wasi__)`. Once that lands, SourceKit could
+keep `Concurrency-libdispatch.cpp` on WASI and this file would go.
+
 ## Two latent bugs found while auditing, neither reported upstream
 
 **1. `CompoundDeclName` and `SelectiveDeclNameRef` are under-aligned on any

@@ -14,6 +14,7 @@ browser tab can compile Swift with no server, the way
 | `swift-frontend.wasm` | the Swift compiler frontend, running on wasm |
 | `wasm-ld.wasm` | LLVM's wasm linker, running on wasm |
 | `swift-sysroot-core.tar` | stdlib modules, archives, `swiftrt.o`, compiler-rt and wasi-libc |
+| `sourcekitd-request.wasm` | sourcekitd, in process, behind a minimal driver: YAML requests in, responses out ([status](docs/status.md#sourcekitd)) |
 
 Serve them next to a page and drive them over a virtual filesystem. There is no driver in
 the pipeline: WASI cannot `fork`/`exec`, so the frontend and the linker are invoked as
@@ -39,8 +40,10 @@ workflow saves its build trees and resumes on the next run.
 | `15-cmark-wasm` | cmark-gfm for the wasm host |
 | `20-llvm-wasm` | LLVM + clang libraries + `wasm-ld.wasm` (hours) |
 | `30-swift-frontend-wasm` | `swift-frontend.wasm` |
+| `35-sourcekitd-wasm` | `sourcekitd-request.wasm`, from Stage 30's tree with SourceKit switched on |
 | `40-sysroot-pack` | the browser sysroot tarball |
 | `50-smoke-test` | compiles, links and runs a Swift program using only the wasm tools |
+| `52-sourcekitd-smoke-test` | asks `sourcekitd-request.wasm` for a completion and a cursor info, under wasmtime |
 
 Requirements: Linux x86_64, ~40 GB disk, cmake, ninja, a host C++ compiler, and a Swift
 toolchain with the matching wasm SDK (Stage 40 takes the sysroot from the official SDK
@@ -77,6 +80,13 @@ unaffected.
   executable and talking to it over a pipe, and WASI can spawn nothing — which is what
   `llvm/lib/Support/WASI/Program.inc` reports rather than pretending otherwise. Supporting
   them needs plugins redesigned as in-process wasm modules the embedder loads.
+
+**sourcekitd needs libdispatch, and WASI has neither it nor threads.** SourceKit only
+reaches libdispatch through its own `WorkQueue` and `Semaphore`, so on WASI those are
+cooperative instead: work is queued and runs, in order, when somebody waits for it — which
+is exactly what a synchronous request does. The Blocks runtime its C API needs is built from
+libdispatch's sources on its own, and `sourcekitdInProc` is a static library. See
+[status.md](docs/status.md#sourcekitd).
 
 LLVM's platform layer also needed WASI implementations of the pieces that assume a POSIX
 process model: `Program.inc` (no processes), `Signals.inc` (no signals), plus guards for
