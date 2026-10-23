@@ -237,9 +237,8 @@ void decodeEntitiesInto(std::string_view S, std::string &Out) {
       Out += S[I];
       continue;
     }
-    const auto E = std::find_if(Entities.begin(), Entities.end(), [&](const Entity &En) {
-      return S.substr(I).starts_with(En.Name);
-    });
+    const auto E = std::find_if(Entities.begin(), Entities.end(),
+                                [&](const Entity &En) { return S.substr(I).starts_with(En.Name); });
     if (E == Entities.end()) {
       Out += '&';
     } else {
