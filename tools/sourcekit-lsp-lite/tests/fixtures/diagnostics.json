@@ -1,0 +1,47 @@
+{
+ "recorded": "sourcekitd (Swift 6.4.1, x86_64 Linux) via SOURCEKIT_LSP_LITE_RECORD, project paths replaced by /project",
+ "text": "let a = Point(x: 0, y: 0)\nlet b = Point(x: 3, y: 4)\nprint(\"\\(a) to \\(b): \\(distance(a, b))\")\nprint(b.norm())\nlet n: Int = b.norm()\n",
+ "request": {
+  "key.request": "source.request.diagnostics",
+  "key.sourcefile": "/project/main.swift",
+  "key.compilerargs": [
+   "/project/Geometry.swift",
+   "/project/Tests/GeometryTests.swift",
+   "/project/main.swift",
+   "-module-name",
+   "App",
+   "-vfsoverlay",
+   "/tmp/sourcekit-lsp-lite-1854887005835/overlay.yaml"
+  ]
+ },
+ "response": {
+  "key.diagnostics": [
+   {
+    "key.line": 5,
+    "key.column": 16,
+    "key.filepath": "/project/main.swift",
+    "key.severity": "source.diagnostic.severity.error",
+    "key.id": "cannot_convert_initializer_value",
+    "key.description": "cannot convert value of type 'Double' to specified type 'Int'",
+    "key.ranges": [
+     {
+      "key.offset": 122,
+      "key.length": 8
+     }
+    ],
+    "key.fixits": [
+     {
+      "key.offset": 122,
+      "key.length": 0,
+      "key.sourcetext": "Int("
+     },
+     {
+      "key.offset": 130,
+      "key.length": 0,
+      "key.sourcetext": ")"
+     }
+    ]
+   }
+  ]
+ }
+}

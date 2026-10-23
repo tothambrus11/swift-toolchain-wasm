@@ -1,0 +1,7 @@
+# sourcekitd (not instrumented, not ours) keeps caches for the life of the
+# process and frees them at exit, or never. Only its libraries are named, so
+# a leak in sourcekit-lsp-lite's own code still fails the test.
+leak:libsourcekitdInProc.so
+leak:libswiftCore.so
+leak:libdispatch.so
+leak:libFoundation

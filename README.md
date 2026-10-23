@@ -15,6 +15,8 @@ browser tab can compile Swift with no server, the way
 | `wasm-ld.wasm` | LLVM's wasm linker, running on wasm |
 | `swift-sysroot-core.tar` | stdlib modules, archives, `swiftrt.o`, compiler-rt and wasi-libc |
 | `sourcekitd-request.wasm` | sourcekitd, in process, behind a minimal driver: YAML requests in, responses out ([status](docs/status.md#sourcekitd)) |
+| `sourcekit-lsp-lite.wasm` | an LSP server over the same sourcekitd, speaking LSP on stdio ([status](docs/status.md#sourcekit-lsp-lite)) |
+| `sourcekit-lsp-lite-reactor.wasm` | the same server as a reactor for a browser worker: one `lsp_handle` call per message |
 
 Serve them next to a page and drive them over a virtual filesystem. There is no driver in
 the pipeline: WASI cannot `fork`/`exec`, so the frontend and the linker are invoked as
@@ -41,9 +43,15 @@ workflow saves its build trees and resumes on the next run.
 | `20-llvm-wasm` | LLVM + clang libraries + `wasm-ld.wasm` (hours) |
 | `30-swift-frontend-wasm` | `swift-frontend.wasm` |
 | `35-sourcekitd-wasm` | `sourcekitd-request.wasm`, from Stage 30's tree with SourceKit switched on |
+| `36-sourcekit-lsp-lite-wasm` | `sourcekit-lsp-lite.wasm` and its reactor, linked like Stage 35's driver (optional) |
 | `40-sysroot-pack` | the browser sysroot tarball |
 | `50-smoke-test` | compiles, links and runs a Swift program using only the wasm tools |
 | `52-sourcekitd-smoke-test` | asks `sourcekitd-request.wasm` for a completion and a cursor info, under wasmtime |
+| `53-sourcekit-lsp-lite-smoke-test` | LSP scenarios against `sourcekit-lsp-lite.wasm` under wasmtime, and the reactor from Node |
+
+[`tools/sourcekit-lsp-lite`](tools/sourcekit-lsp-lite) is the LSP server's C++ source, with
+its own native build, presets, tests and [workflow](.github/workflows/lsp-lite.yml): it builds
+and tests in minutes against an official Swift toolchain, without any of the stages above.
 
 Requirements: Linux x86_64, ~40 GB disk, cmake, ninja, a host C++ compiler, and a Swift
 toolchain with the matching wasm SDK (Stage 40 takes the sysroot from the official SDK

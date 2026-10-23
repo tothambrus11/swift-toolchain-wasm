@@ -153,6 +153,19 @@ jobs:
         continue-on-error: true
         run: ./scripts/52-sourcekitd-smoke-test.sh
 
+      # sourcekit-lsp-lite (Stage 36) is optional in build-all.sh, so its modules
+      # may be missing; say so, and never let it hold the toolchain back.
+      - name: Smoke-test sourcekit-lsp-lite
+        if: steps.pipeline.outputs.complete == 'true'
+        continue-on-error: true
+        run: |
+          missing=0
+          for f in out/sourcekit-lsp-lite.wasm out/sourcekit-lsp-lite-reactor.wasm; do
+            [ -f "$f" ] || { echo "::warning::$f was not built; see Stage 36 in the build log."; missing=1; }
+          done
+          [ "$missing" = 0 ] || exit 0
+          ./scripts/53-sourcekit-lsp-lite-smoke-test.sh
+
       - name: Compress artifacts
         if: steps.pipeline.outputs.complete == 'true'
         run: |
@@ -200,6 +213,8 @@ jobs:
             | `wasm-ld.wasm` | LLVM's wasm linker, running on wasm |
             | `swift-sysroot-core.tar` | stdlib modules, archives and wasi-libc to mount in the browser |
             | `sourcekitd-request.wasm` | in-process sourcekitd with a minimal driver: YAML requests in, responses out |
+            | `sourcekit-lsp-lite.wasm` | an LSP server over the same sourcekitd, a WASI command speaking LSP on stdio (when Stage 36 built it) |
+            | `sourcekit-lsp-lite-reactor.wasm` | the same server as a WASI reactor for a browser worker: `lsp_handle` per message, `lsp_idle` for diagnostics |
 
             Serve these next to a page and point a `WasmBackend` at the directory.
 

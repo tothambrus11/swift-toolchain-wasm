@@ -1,0 +1,83 @@
+{
+ "recorded": "sourcekitd (Swift 6.4.1, x86_64 Linux) via SOURCEKIT_LSP_LITE_RECORD, project paths replaced by /project",
+ "text": "let a = Point(x: 0, y: 0)\nlet b = Point(x: 3, y: 4)\nprint(\"\\(a) to \\(b): \\(distance(a, b))\")\nprint(b.norm())\nb.\n",
+ "request": {
+  "key.request": "source.request.codecomplete",
+  "key.sourcefile": "/project/main.swift",
+  "key.offset": 111,
+  "key.compilerargs": [
+   "/project/Geometry.swift",
+   "/project/Tests/GeometryTests.swift",
+   "/project/main.swift",
+   "-module-name",
+   "App",
+   "-vfsoverlay",
+   "/tmp/sourcekit-lsp-lite-1855488684043/overlay.yaml"
+  ],
+  "key.sourcetext": "<the text below>"
+ },
+ "response": {
+  "key.results": [
+   {
+    "key.kind": "source.lang.swift.keyword",
+    "key.name": "self",
+    "key.description": "self",
+    "key.sourcetext": "self",
+    "key.typename": "Point",
+    "key.context": "source.codecompletion.context.thisclass",
+    "key.typerelation": "source.codecompletion.typerelation.unknown",
+    "key.num_bytes_to_erase": 0
+   },
+   {
+    "key.kind": "source.lang.swift.decl.var.instance",
+    "key.name": "x",
+    "key.description": "x",
+    "key.sourcetext": "x",
+    "key.typename": "Double",
+    "key.modulename": "App",
+    "key.associated_usrs": "s:3App5PointV1xSdvp",
+    "key.context": "source.codecompletion.context.thisclass",
+    "key.typerelation": "source.codecompletion.typerelation.unknown",
+    "key.num_bytes_to_erase": 0
+   },
+   {
+    "key.kind": "source.lang.swift.decl.var.instance",
+    "key.name": "y",
+    "key.description": "y",
+    "key.sourcetext": "y",
+    "key.typename": "Double",
+    "key.modulename": "App",
+    "key.associated_usrs": "s:3App5PointV1ySdvp",
+    "key.context": "source.codecompletion.context.thisclass",
+    "key.typerelation": "source.codecompletion.typerelation.unknown",
+    "key.num_bytes_to_erase": 0
+   },
+   {
+    "key.kind": "source.lang.swift.decl.function.method.instance",
+    "key.name": "norm()",
+    "key.description": "norm()",
+    "key.sourcetext": "norm()",
+    "key.typename": "Double",
+    "key.modulename": "App",
+    "key.doc.brief": "Distance from the origin.",
+    "key.associated_usrs": "s:3App5PointV4normSdyF",
+    "key.context": "source.codecompletion.context.thisclass",
+    "key.typerelation": "source.codecompletion.typerelation.unknown",
+    "key.num_bytes_to_erase": 0
+   },
+   {
+    "key.kind": "source.lang.swift.decl.var.instance",
+    "key.name": "description",
+    "key.description": "description",
+    "key.sourcetext": "description",
+    "key.typename": "String",
+    "key.modulename": "App",
+    "key.doc.brief": "A textual representation of this instance.",
+    "key.associated_usrs": "s:3App5PointV11descriptionSSvp s:s23CustomStringConvertibleP11descriptionSSvp",
+    "key.context": "source.codecompletion.context.thisclass",
+    "key.typerelation": "source.codecompletion.typerelation.unknown",
+    "key.num_bytes_to_erase": 0
+   }
+  ]
+ }
+}

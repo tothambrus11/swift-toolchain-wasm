@@ -1,0 +1,41 @@
+name: Swift toolchain for sourcekit-lsp-lite
+description: >
+  Installs a Swift release with swiftly, the way build-toolchain.yml does, and
+  exports SOURCEKITD_PREFIX (the toolchain's usr directory, with
+  lib/libsourcekitdInProc.so) for tools/sourcekit-lsp-lite's CMake presets.
+  Linux toolchains do not always ship sourcekitd.h; when this one does not, the
+  header is fetched from the same release tag and SOURCEKITD_INCLUDE_DIR names it.
+inputs:
+  version:
+    description: The Swift release, e.g. 6.3.3.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install Swift ${{ inputs.version }} with swiftly
+      shell: bash
+      env:
+        SWIFT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o swiftly.tar.gz https://download.swift.org/swiftly/linux/swiftly-x86_64.tar.gz
+        tar -xzf swiftly.tar.gz
+        ./swiftly init -y --skip-install
+        . "$HOME/.local/share/swiftly/env.sh"
+        swiftly install "$SWIFT_VERSION" --use
+        # The usr directory that holds libsourcekitdInProc.so, found rather than
+        # assumed: swiftly's layout has changed between releases.
+        lib="$(find "$HOME/.local/share/swiftly/toolchains" -path "*${SWIFT_VERSION}*" \
+          -name libsourcekitdInProc.so -print -quit)"
+        [[ -n "$lib" ]] || { echo "::error::no libsourcekitdInProc.so in Swift ${SWIFT_VERSION}"; exit 1; }
+        prefix="$(dirname "$(dirname "$lib")")"
+        echo "SOURCEKITD_PREFIX=$prefix" >> "$GITHUB_ENV"
+        echo "Swift ${SWIFT_VERSION}: SOURCEKITD_PREFIX=$prefix"
+        if [[ ! -f "$prefix/include/SourceKit/sourcekitd.h" && ! -f "$prefix/include/sourcekitd/sourcekitd.h" ]]; then
+          mkdir -p "$RUNNER_TEMP/sourcekitd-include"
+          curl -fsSL -o "$RUNNER_TEMP/sourcekitd-include/sourcekitd.h" \
+            "https://raw.githubusercontent.com/swiftlang/swift/swift-${SWIFT_VERSION}-RELEASE/tools/SourceKit/tools/sourcekitd/include/sourcekitd/sourcekitd.h"
+          echo "SOURCEKITD_INCLUDE_DIR=$RUNNER_TEMP/sourcekitd-include" >> "$GITHUB_ENV"
+          echo "the toolchain has no sourcekitd.h; using the one from swift-${SWIFT_VERSION}-RELEASE"
+        fi

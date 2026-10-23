@@ -1,0 +1,43 @@
+{
+ "recorded": "sourcekitd (Swift 6.4.1, x86_64 Linux) via SOURCEKIT_LSP_LITE_RECORD, project paths replaced by /project",
+ "text": "let a = Point(x: 0, y: 0)\nlet b = Point(x: 3, y: 4)\nprint(\"\\(a) to \\(b): \\(distance(a, b))\")\nprint(b.norm())\n",
+ "request": {
+  "key.request": "source.request.relatedidents",
+  "key.sourcefile": "/project/main.swift",
+  "key.offset": 30,
+  "key.compilerargs": [
+   "/project/Geometry.swift",
+   "/project/Tests/GeometryTests.swift",
+   "/project/main.swift",
+   "-module-name",
+   "App",
+   "-vfsoverlay",
+   "/tmp/sourcekit-lsp-lite-1855936881731/overlay.yaml"
+  ]
+ },
+ "response": {
+  "key.results": [
+   {
+    "key.offset": 30,
+    "key.length": 1,
+    "key.nametype": "source.syntacticrename.definition"
+   },
+   {
+    "key.offset": 69,
+    "key.length": 1,
+    "key.nametype": "source.syntacticrename.reference"
+   },
+   {
+    "key.offset": 87,
+    "key.length": 1,
+    "key.nametype": "source.syntacticrename.reference"
+   },
+   {
+    "key.offset": 99,
+    "key.length": 1,
+    "key.nametype": "source.syntacticrename.reference"
+   }
+  ],
+  "key.name": "b"
+ }
+}

@@ -1,0 +1,89 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "SOURCEKITD_PREFIX": "$env{SOURCEKITD_PREFIX}",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Debug, clang, warnings as errors",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "LITE_WARNINGS_AS_ERRORS": "ON" }
+    },
+    {
+      "name": "release",
+      "displayName": "Optimized, clang",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "LITE_WARNINGS_AS_ERRORS": "ON" }
+    },
+    {
+      "name": "gcc",
+      "displayName": "Debug, GCC (its extra warnings), warnings as errors",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LITE_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "tidy",
+      "displayName": "clang-tidy (and cppcheck if installed) during the build, as errors",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LITE_WARNINGS_AS_ERRORS": "ON",
+        "LITE_ENABLE_CLANG_TIDY": "ON",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "cppcheck",
+      "displayName": "cppcheck during the build",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LITE_ENABLE_CPPCHECK": "ON",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "AddressSanitizer + LeakSanitizer + UBSan, clang",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LITE_WARNINGS_AS_ERRORS": "ON",
+        "LITE_ENABLE_SANITIZERS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "gcc", "configurePreset": "gcc" },
+    { "name": "tidy", "configurePreset": "tidy" },
+    { "name": "cppcheck", "configurePreset": "cppcheck" },
+    { "name": "asan", "configurePreset": "asan" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false, "timeout": 300 }
+    },
+    { "name": "dev", "inherits": "base", "configurePreset": "dev" },
+    { "name": "release", "inherits": "base", "configurePreset": "release" },
+    { "name": "gcc", "inherits": "base", "configurePreset": "gcc" },
+    { "name": "asan", "inherits": "base", "configurePreset": "asan" }
+  ]
+}

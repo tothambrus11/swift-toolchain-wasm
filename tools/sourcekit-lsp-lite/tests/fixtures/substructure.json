@@ -1,0 +1,180 @@
+{
+ "recorded": "sourcekitd (Swift 6.4.1, x86_64 Linux) via SOURCEKIT_LSP_LITE_RECORD, project paths replaced by /project",
+ "text": "/// A point in the plane.\nstruct Point: CustomStringConvertible {\n    var x: Double\n    var y: Double\n\n    /// Distance from the origin.\n    func norm() -> Double {\n        (x * x + y * y).squareRoot()\n    }\n\n    var description: String { \"(\\(x), \\(y))\" }\n}\n\n/// Euclidean distance between two points.\nfunc distance(_ a: Point, _ b: Point) -> Double {\n    Point(x: a.x - b.x, y: a.y - b.y).norm()\n}\n",
+ "request": {
+  "key.request": "source.request.editor.open",
+  "key.name": "sourcekit-lsp-lite-symbols:/project/Geometry.swift",
+  "key.sourcetext": "<the text below>",
+  "key.enablesyntaxmap": 0,
+  "key.enablesubstructure": 1,
+  "key.syntactic_only": 1
+ },
+ "response": {
+  "key.offset": 0,
+  "key.length": 399,
+  "key.diagnostic_stage": "source.diagnostic.stage.swift.parse",
+  "key.substructure": [
+   {
+    "key.offset": 26,
+    "key.length": 231,
+    "key.kind": "source.lang.swift.decl.struct",
+    "key.accessibility": "source.lang.swift.accessibility.internal",
+    "key.nameoffset": 33,
+    "key.namelength": 5,
+    "key.bodyoffset": 65,
+    "key.bodylength": 191,
+    "key.docoffset": 0,
+    "key.doclength": 26,
+    "key.name": "Point",
+    "key.inheritedtypes": [
+     {
+      "key.name": "CustomStringConvertible"
+     }
+    ],
+    "key.elements": [
+     {
+      "key.kind": "source.lang.swift.structure.elem.typeref",
+      "key.offset": 40,
+      "key.length": 23
+     }
+    ],
+    "key.substructure": [
+     {
+      "key.offset": 70,
+      "key.length": 13,
+      "key.kind": "source.lang.swift.decl.var.instance",
+      "key.accessibility": "source.lang.swift.accessibility.internal",
+      "key.setter_accessibility": "source.lang.swift.accessibility.internal",
+      "key.nameoffset": 74,
+      "key.namelength": 1,
+      "key.name": "x",
+      "key.typename": "Double"
+     },
+     {
+      "key.offset": 88,
+      "key.length": 13,
+      "key.kind": "source.lang.swift.decl.var.instance",
+      "key.accessibility": "source.lang.swift.accessibility.internal",
+      "key.setter_accessibility": "source.lang.swift.accessibility.internal",
+      "key.nameoffset": 92,
+      "key.namelength": 1,
+      "key.name": "y",
+      "key.typename": "Double"
+     },
+     {
+      "key.offset": 141,
+      "key.length": 66,
+      "key.kind": "source.lang.swift.decl.function.method.instance",
+      "key.accessibility": "source.lang.swift.accessibility.internal",
+      "key.nameoffset": 146,
+      "key.namelength": 6,
+      "key.bodyoffset": 164,
+      "key.bodylength": 42,
+      "key.docoffset": 107,
+      "key.doclength": 30,
+      "key.name": "norm()",
+      "key.typename": "Double",
+      "key.substructure": [
+       {
+        "key.offset": 173,
+        "key.length": 28,
+        "key.kind": "source.lang.swift.expr.call",
+        "key.nameoffset": 173,
+        "key.namelength": 26,
+        "key.bodyoffset": 200,
+        "key.bodylength": 0,
+        "key.name": "(x * x + y * y).squareRoot"
+       }
+      ]
+     },
+     {
+      "key.offset": 213,
+      "key.length": 42,
+      "key.kind": "source.lang.swift.decl.var.instance",
+      "key.accessibility": "source.lang.swift.accessibility.internal",
+      "key.nameoffset": 217,
+      "key.namelength": 11,
+      "key.bodyoffset": 238,
+      "key.bodylength": 16,
+      "key.name": "description",
+      "key.typename": "String"
+     }
+    ]
+   },
+   {
+    "key.offset": 302,
+    "key.length": 96,
+    "key.kind": "source.lang.swift.decl.function.free",
+    "key.accessibility": "source.lang.swift.accessibility.internal",
+    "key.nameoffset": 307,
+    "key.namelength": 32,
+    "key.bodyoffset": 351,
+    "key.bodylength": 46,
+    "key.docoffset": 259,
+    "key.doclength": 43,
+    "key.name": "distance(_:_:)",
+    "key.typename": "Double",
+    "key.substructure": [
+     {
+      "key.offset": 316,
+      "key.length": 10,
+      "key.kind": "source.lang.swift.decl.var.parameter",
+      "key.name": "a",
+      "key.typename": "Point"
+     },
+     {
+      "key.offset": 328,
+      "key.length": 10,
+      "key.kind": "source.lang.swift.decl.var.parameter",
+      "key.name": "b",
+      "key.typename": "Point"
+     },
+     {
+      "key.offset": 356,
+      "key.length": 40,
+      "key.kind": "source.lang.swift.expr.call",
+      "key.nameoffset": 356,
+      "key.namelength": 38,
+      "key.bodyoffset": 395,
+      "key.bodylength": 0,
+      "key.name": "Point(x: a.x - b.x, y: a.y - b.y).norm",
+      "key.substructure": [
+       {
+        "key.offset": 356,
+        "key.length": 33,
+        "key.kind": "source.lang.swift.expr.call",
+        "key.nameoffset": 356,
+        "key.namelength": 5,
+        "key.bodyoffset": 362,
+        "key.bodylength": 26,
+        "key.name": "Point",
+        "key.substructure": [
+         {
+          "key.offset": 362,
+          "key.length": 12,
+          "key.kind": "source.lang.swift.expr.argument",
+          "key.nameoffset": 362,
+          "key.namelength": 1,
+          "key.bodyoffset": 365,
+          "key.bodylength": 9,
+          "key.name": "x"
+         },
+         {
+          "key.offset": 376,
+          "key.length": 12,
+          "key.kind": "source.lang.swift.expr.argument",
+          "key.nameoffset": 376,
+          "key.namelength": 1,
+          "key.bodyoffset": 379,
+          "key.bodylength": 9,
+          "key.name": "y"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

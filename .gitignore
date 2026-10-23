@@ -2,3 +2,5 @@
 src/
 build/
 out/
+# ...but `src/` above matches at any depth, and the tools' own sources are ours.
+!tools/*/src/

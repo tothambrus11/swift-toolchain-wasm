@@ -1,0 +1,3 @@
+# LLVM style, like the Swift and SourceKit sources this links with.
+BasedOnStyle: LLVM
+ColumnLimit: 100

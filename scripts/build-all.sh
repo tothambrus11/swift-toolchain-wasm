@@ -14,16 +14,26 @@ STAGES=(
   20-llvm-wasm
   30-swift-frontend-wasm
   35-sourcekitd-wasm
+  36-sourcekit-lsp-lite-wasm
   40-sysroot-pack
   55-check-alignment-contracts
 )
+
+# Stages whose failure is reported and does not stop the pipeline: they are
+# new, and nothing after them depends on them. The workflow checks their
+# artifacts separately.
+OPTIONAL_STAGES=(36-sourcekit-lsp-lite-wasm)
 
 # Optionally stop early, e.g. BUILD_UNTIL=20-llvm-wasm ./scripts/build-all.sh
 : "${BUILD_UNTIL:=}"
 
 for stage in "${STAGES[@]}"; do
   log "=== ${stage} ==="
-  "${TOOLCHAIN_ROOT}/scripts/${stage}.sh"
+  if [[ " ${OPTIONAL_STAGES[*]} " == *" ${stage} "* ]]; then
+    "${TOOLCHAIN_ROOT}/scripts/${stage}.sh" || warn "${stage} failed; continuing without its artifacts"
+  else
+    "${TOOLCHAIN_ROOT}/scripts/${stage}.sh"
+  fi
   [[ -n "$BUILD_UNTIL" && "$stage" == "$BUILD_UNTIL" ]] && { log "stopping after ${stage}"; break; }
 done
 

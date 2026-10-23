@@ -113,11 +113,107 @@ What single-threaded costs, and what an embedder has to know:
 * **Cancellation cannot interrupt a running request:** nothing else runs while it does.
 * **Notifications** (document updates, semantic-info-ready) are queued work like any
   other. They run when the next request waits, or when the embedder calls
-  `SourceKit::WorkQueue::runPendingWork()`. There is no C entry point for that yet; an
-  embedding through the C API needs one.
+  `SourceKit::WorkQueue::runPendingWork()`. There is no C entry point for that; an
+  embedding in C++ calls it directly, as [sourcekit-lsp-lite](#sourcekit-lsp-lite) does.
 * **A queued item that takes a `std::mutex` its waiter holds traps** (wasi-libc's
   single-threaded mutex has nothing to wait for). Nothing in the request paths used by
   completion and cursor info is known to do this, but it is the failure to expect.
+
+## sourcekit-lsp-lite
+
+**Status: passes natively against Swift 6.4.1's `libsourcekitdInProc.so`; compiles for
+`wasm32-wasip1`; the wasm link is unverified.** [`tools/sourcekit-lsp-lite`](../tools/sourcekit-lsp-lite)
+is a small LSP server in C++20 over sourcekitd's public C API (`sourcekitd.h`, synchronous
+`sourcekitd_send_request_sync` only: no blocks, no notification handler). It exists because
+SourceKit-LSP is a Swift program with threads, an index store and a build-system layer,
+none of which a single-threaded WASI module can host. Stage 36 links it into the same
+module as Stage 35's static sourcekitd; Stage 53 runs its LSP tests under wasmtime and
+drives the reactor from Node. Both are optional: a failure warns and the toolchain still ships.
+
+### What each LSP request becomes
+
+| LSP | sourcekitd |
+| --- | --- |
+| `didOpen` / `didChange` / `didClose` | `editor.open` (`syntactic_only`), `editor.replacetext` per incremental change (or one whole-text replace), `editor.close` |
+| `publishDiagnostics` | `source.request.diagnostics`, from idle time after edits stop (50 ms natively), for every open file |
+| `completion` | `codecomplete` at the start of the word being typed; the server filters by the typed prefix (a prefix, then a case-insensitive prefix, then a subsequence starting with the same letter), ranks, caps at `maxCompletions`, and turns placeholders into snippets |
+| `hover` | `cursorinfo`: the annotated declaration and the doc comment, as Markdown |
+| `definition` | `cursorinfo`'s `key.filepath` + `key.offset` (or its module name for SDK symbols, which yield nothing) |
+| `references` | `cursorinfo` for the USR, then in every project file `cursorinfo` on textual occurrences of the name until one has that USR, then `relatedidents` from there |
+| `documentHighlight` | `relatedidents` |
+| `documentSymbol` | a throwaway `editor.open` with substructure, mapped to a `DocumentSymbol` tree |
+| `signatureHelp` | `signaturehelp` |
+
+Positions are UTF-16 code units unless the client offers `utf-8` in
+`general.positionEncodings`; a line table converts them to sourcekitd's UTF-8 byte offsets
+and back, with surrogate pairs and lone surrogates handled. Every request gets the project's
+files as compiler arguments (every `*.swift` under the root, minus hidden directories,
+`node_modules`, `build` and `exclude` prefixes), the module name from `@testable import`
+(else `main`), and whatever `compilerArgs` the client gives.
+
+Unsaved text: diagnostics and cursor info see other files' editor buffers, but
+`codecomplete` and `signaturehelp` read other files from disk. So the server mirrors every
+open document into a shadow directory and passes `-vfsoverlay` mapping each real path to
+its mirror (`use-external-names: false`). On WASI the shadow directory is created under
+`$TMPDIR`, so the host must preopen a writable `/tmp` and set `TMPDIR=/tmp` (or say
+`shadowDirectory: "none"` and accept stale completions across files).
+
+### What SourceKit-LSP has that this does not
+
+* **No index.** No index store, no background indexing, no workspace symbols, no call or
+  type hierarchy. References are a textual search narrowed by USR, so they cover the
+  project's files only, and an initializer, whose uses are spelled as the type's name,
+  is found less reliably than a named declaration.
+* **No build system.** No SwiftPM, no `compile_commands.json`, no multiple modules: one
+  module, the files the server scanned, the arguments the client sent.
+* **No rename, formatting, semantic tokens, code actions or fix-its, inlay hints,
+  folding ranges, generated interfaces, or macro expansion** (macros cannot run on WASI
+  anyway).
+* **No cancellation and no concurrency.** One request at a time; `$/cancelRequest` is
+  ignored, and a slow answer holds the next message.
+* **No `completionItem/resolve`.** Items carry their documentation brief up front.
+
+### Driving it from JavaScript
+
+`sourcekit-lsp-lite-reactor.wasm` is a WASI reactor; a browser worker instantiates it once
+with a WASI shim and calls `_initialize`. It never reads stdin. Per JSON-RPC message, as
+UTF-8 JSON without framing:
+
+```js
+const p = lsp.lsp_alloc(bytes.length);
+new Uint8Array(lsp.memory.buffer, p, bytes.length).set(bytes);
+const n = lsp.lsp_handle(p, bytes.length);   // runs the request to completion
+lsp.lsp_free(p);
+const out = decoder.decode(new Uint8Array(lsp.memory.buffer, lsp.lsp_output(), n));
+// out: zero or more messages, one JSON object per line (replies and notifications);
+// read it before the next call, which overwrites it.
+```
+
+When no message is waiting and `lsp_has_idle_work()` is nonzero, call `lsp_idle()` (same
+output contract) from a debounced timer: that is where diagnostics are computed and
+published, one file per call so typing stays responsive. `lsp_exit_code()` is -1 until
+`exit`, then 0 or 1. The preopens the worker needs: the sysroot, the project at the path its
+URIs name, and a writable `/tmp`. The compiler arguments (`-target wasm32-unknown-wasip1`,
+`-sdk`, `-resource-dir`, `-module-cache-path`) go in `initializationOptions.compilerArgs`.
+[`tests/integration/reactor_host.mjs`](../tools/sourcekit-lsp-lite/tests/integration/reactor_host.mjs)
+is the reference host; `sourcekit-lsp-lite.wasm` (a command, LSP on stdio with
+`Content-Length` framing) is the same server for wasmtime and tests.
+
+The server calls `SourceKit::WorkQueue::runPendingWork()` after every message and idle
+step (`src/pump.cpp`, linked against the patch's C++ declaration), so queued sourcekitd work
+does not pile up between requests; no C entry point was needed.
+
+### Native build and checks
+
+`cmake --preset <name> && cmake --build --preset <name> && ctest --preset <name>`, with
+`SOURCEKITD_PREFIX` set to a Swift toolchain's `usr`. Presets: `dev` (clang, the warnings in
+`cmake/warnings.txt` as errors), `gcc` (GCC plus its extra warnings), `asan` (Address,
+Leak and UndefinedBehavior sanitizers), `tidy` (clang-tidy as errors during the build,
+`.clang-tidy`), `cppcheck`, and `release`. ctest runs the doctest unit tests (JSON, text
+and position conversion, framing, options, request building, and translation of recorded
+sourcekitd responses in `tests/fixtures`), the reactor driven in process, and thirteen LSP
+scenarios over stdio against `tests/project`. [`lsp-lite.yml`](../.github/workflows/lsp-lite.yml)
+runs all of it, plus a wasm compile with the same warnings.
 
 ## Known limits
 

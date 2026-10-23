@@ -1,0 +1,51 @@
+# clang-tidy for sourcekit-lsp-lite, after cpp-best-practices. Run by the
+# "tidy" preset as part of the build (CMAKE_CXX_CLANG_TIDY), warnings as
+# errors. Every exclusion says why.
+Checks: >
+  bugprone-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  misc-*,
+  clang-analyzer-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-pro-type-vararg,
+  -misc-include-cleaner,
+  -readability-braces-around-statements,
+  -readability-implicit-bool-conversion,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -misc-no-recursion,
+  -readability-avoid-unconditional-preprocessor-if,
+  -cppcoreguidelines-macro-usage
+# Why each is off:
+#   modernize-use-trailing-return-type   style; LLVM's style (the code around it) does not use it
+#   readability-identifier-length        LLVM-style short names (B, E, I) for local offsets
+#   readability-magic-numbers / cppcoreguidelines-avoid-magic-numbers
+#                                        UTF-8 lead bytes (0x80, 0xC0...) are clearer as themselves;
+#                                        LSP enumerations are named constants in translate.cpp
+#   bugprone-easily-swappable-parameters (path, text) pairs are the shape of the domain
+#   cppcoreguidelines-pro-type-vararg    snprintf/fprintf for the stderr log, at the process edge
+#   misc-include-cleaner                 confused by sourcekitd.h's C macros; includes are checked by
+#                                        building on three compilers (clang, GCC, WASI clang)
+#   readability-braces-around-statements LLVM style omits braces on one-line bodies
+#   readability-implicit-bool-conversion `if (!F)` for owning pointers is the idiom
+#   cppcoreguidelines-pro-bounds-constant-array-index
+#                                        indices are bounds-checked by the loop or by min()
+#   misc-no-recursion                    JSON and declaration trees are recursive; depth is bounded
+#   readability-avoid-unconditional-preprocessor-if, cppcoreguidelines-macro-usage
+#                                        the one macro (LSP_EXPORT) names a wasm-only attribute
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*/sourcekit-lsp-lite/src/.*'
+FormatStyle: file
+CheckOptions:
+  - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: true
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 40
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true

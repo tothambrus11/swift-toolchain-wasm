@@ -1,0 +1,27 @@
+# The warnings every compiler gets, one per line, after cpp-best-practices'
+# cmake_template. Read by cmake/CompilerWarnings.cmake for the native build
+# and by scripts/36-sourcekit-lsp-lite-wasm.sh for the wasm one, so both build
+# with exactly these.
+-Wall
+-Wextra
+# a declaration shadows one from a parent context
+-Wshadow
+# a class with virtual functions has a non-virtual destructor
+-Wnon-virtual-dtor
+-Wold-style-cast
+# potential performance problem casts
+-Wcast-align
+-Wunused
+# overloading (not overriding) a virtual function
+-Woverloaded-virtual
+-Wpedantic
+# type conversions that may lose data, and sign conversions
+-Wconversion
+-Wsign-conversion
+-Wnull-dereference
+# float implicitly promoted to double
+-Wdouble-promotion
+# security issues around printf-like functions
+-Wformat=2
+# a switch case falls through without [[fallthrough]]
+-Wimplicit-fallthrough

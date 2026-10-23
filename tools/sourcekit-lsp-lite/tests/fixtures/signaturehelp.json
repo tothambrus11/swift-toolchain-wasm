@@ -1,0 +1,40 @@
+{
+ "recorded": "sourcekitd (Swift 6.4.1, x86_64 Linux) via SOURCEKIT_LSP_LITE_RECORD, project paths replaced by /project",
+ "text": "let a = Point(x: 0, y: 0)\nlet b = Point(x: 3, y: 4)\nprint(\"\\(a) to \\(b): \\(distance(a, b))\")\nprint(b.norm())\nlet d = distance(a, \n",
+ "request": {
+  "key.request": "source.request.signaturehelp",
+  "key.sourcefile": "/project/main.swift",
+  "key.offset": 129,
+  "key.compilerargs": [
+   "/project/Geometry.swift",
+   "/project/Tests/GeometryTests.swift",
+   "/project/main.swift",
+   "-module-name",
+   "App",
+   "-vfsoverlay",
+   "/tmp/sourcekit-lsp-lite-1855853522657/overlay.yaml"
+  ]
+ },
+ "response": {
+  "key.signatures": [
+   {
+    "key.name": "distance(_ a: Point, _ b: Point) -> Double",
+    "key.doc_comment": "Euclidean distance between two points.",
+    "key.parameters": [
+     {
+      "key.name": "a",
+      "key.nameoffset": 9,
+      "key.namelength": 10
+     },
+     {
+      "key.name": "b",
+      "key.nameoffset": 21,
+      "key.namelength": 10
+     }
+    ],
+    "key.active_parameter": 1
+   }
+  ],
+  "key.active_signature": 0
+ }
+}
