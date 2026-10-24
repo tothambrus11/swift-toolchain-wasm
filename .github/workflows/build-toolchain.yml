@@ -223,8 +223,7 @@ jobs:
           retention-days: 30
 
       - name: Fail if the sourcekitd smoke test failed
-        # A macros build treats SourceKit as optional (scripts/build-all.sh) for now.
-        if: steps.pipeline.outputs.complete == 'true' && env.SWIFT_MACROS != '1' && steps.sourcekitd-smoke.outcome != 'success'
+        if: steps.pipeline.outputs.complete == 'true' && steps.sourcekitd-smoke.outcome != 'success'
         run: |
           echo "::error::sourcekitd-request.wasm did not answer completion and cursor info; see the 'Smoke-test sourcekitd' step."
           exit 1

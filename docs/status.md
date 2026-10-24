@@ -19,6 +19,39 @@ dictionaries and sorting, string interpolation, closures, generics through `map`
 A single-file compile takes roughly one second in Node, about three in a browser tab.
 `swift-frontend.wasm` is 146 MiB and `wasm-ld.wasm` is 57 MiB.
 
+## Macros (`SWIFT_MACROS=1`, workflow input `macros: true`)
+
+A second build of the compiler expands macros on the wasm host itself. ASTGen, the
+compiler's swift-syntax and SwiftCompilerSources are compiled for `wasm32-wasip1` and
+linked into `swift-frontend.wasm`; macro plugins are wasm modules of their own, which the
+compiler reaches through its in-process plugin hook.
+
+* **The plugin channel.** With no `dlopen`, `PluginRegistry` (patch `0003`) sends each
+  plugin-server message to two wasm imports, `swift_plugin_host.handle_message` and
+  `swift_plugin_host.take_response`. The embedder answers the server's own messages
+  (`getCapability`, `loadPluginLibrary`) and forwards each expansion to the plugin that
+  provides the macro's module, in the same JSON protocol (version 7) the native in-process
+  server speaks. [`tools/plugin-host/swift-plugin-host.mjs`](../tools/plugin-host/swift-plugin-host.mjs)
+  is that embedder: synchronous, dependency-free, the same code in Node and a browser
+  worker. [`run-frontend.mjs`](../tools/plugin-host/run-frontend.mjs) runs the compiler
+  under Node with it.
+* **The plugins.** Stage 37 builds `SwiftMacroPlugins.wasm`, one WASI module with the
+  example `StringifyMacros`, `ObservationMacros` and swift-testing's `TestingMacros`,
+  sharing one copy of swift-syntax. The compiler is told where they are with
+  `-load-resolved-plugin /path/SwiftMacroPlugins.wasm##StringifyMacros,ObservationMacros,TestingMacros`
+  (an empty executable path means in-process).
+* **Without JavaScript.** A frontend built this way cannot be instantiated without the two
+  imports. [`no-plugins.wat`](../tools/plugin-host/no-plugins.wat) is an embedder with no
+  plugins for wasmtime (`--preload swift_plugin_host=no-plugins.wat`): everything that uses
+  no macros works, and a macro is reported against its use.
+* **Tested.** Stage 57 compiles a file using `#stringify`, `@Observable` and
+  `@Test`/`#expect` with `swift-frontend.wasm` under Node, links it with `wasm-ld.wasm`,
+  runs it under wasmtime and checks its output, including swift-testing's own report of
+  the two tests; a second file must fail with the diagnostic its macro emits. The plugin
+  host has its own unit tests (`node --test tools/plugin-host/test`).
+
+SIZES_PLACEHOLDER
+
 ## The 32-bit bugs that had to be fixed first
 
 Swift declares how many spare low bits a pointer to each AST type has:
@@ -239,20 +272,16 @@ runs all of it, plus a wasm compile with the same warnings.
 
 ## Known limits
 
-* **Macros and compiler plugins cannot work.** They are spawned executables, and WASI
-  cannot spawn anything — see [porting.md](porting.md). `SWIFT_BUILD_SWIFT_SYNTAX` is off.
-* **No Swift-implemented SIL optimizer passes.** `SWIFT_ENABLE_SWIFT_IN_SWIFT` is off,
-  because the compiler's own Swift modules need C++ interop and interop is broken for
-  `wasm32-unknown-wasip1` in the stock Swift 6.3.3 SDK: any C++ module import hits a Clang
-  module cycle, `SwiftWASILibc -> std_inttypes_h -> SwiftWASILibc`. That reproduces with a
-  two-line Swift file against the stock SDK, so it is upstream. Upstream has since fixed
-  the identical cycle for the Emscripten libc module — `[no_undeclared_includes]` plus
-  moving `complex.h` into a submodule, [swift#90332] — and has not applied it to
-  `wasi-libc.modulemap`, which still reads `module SwiftWASILibc [system]` on both `main`
-  and `release/6.3`. Porting those two lines is the way out of this limit; see
-  [upstream-status.md](upstream-status.md).
-
-[swift#90332]: https://github.com/swiftlang/swift/pull/90332
+* **Macros need the macros build** (above). The default build has no swift-syntax, so a
+  file that uses a macro fails to compile with it.
+* **No Swift-implemented SIL optimizer passes in the default build.**
+  `SWIFT_ENABLE_SWIFT_IN_SWIFT` is off there; the macros build turns it on. The compiler's
+  Swift code needs C++ interop, which the stock Swift 6.3.3 SDK breaks for
+  `wasm32-unknown-wasip1` with a Clang module cycle, `SwiftWASILibc -> std_inttypes_h ->
+  SwiftWASILibc`; the macros build installs a fixed `wasi-libc.modulemap` (patch `0002`, a
+  port of [swift#90332]; see [upstream-status.md](upstream-status.md)).
 * **4 GiB of address space.** Single-file compiles fit comfortably; whole-module builds of
   large packages may not.
 * **Size.** ~300 MiB of artifacts on a cold load, before compression.
+
+[swift#90332]: https://github.com/swiftlang/swift/pull/90332

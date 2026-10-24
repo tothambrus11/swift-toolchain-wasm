@@ -26,12 +26,6 @@ STAGES=(
 # new, and nothing after them depends on them. The workflow checks their
 # artifacts separately.
 OPTIONAL_STAGES=(36-sourcekit-lsp-lite-wasm)
-# Macro support (SWIFT_MACROS=1) is new: until it is the default, SourceKit
-# built with the compiler's Swift parser in it must not stop the build that
-# proves macros work.
-if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
-  OPTIONAL_STAGES+=(35-sourcekitd-wasm)
-fi
 
 # Optionally stop early, e.g. BUILD_UNTIL=20-llvm-wasm ./scripts/build-all.sh
 : "${BUILD_UNTIL:=}"

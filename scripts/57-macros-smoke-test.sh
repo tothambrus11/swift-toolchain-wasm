@@ -156,7 +156,8 @@ wasmtime run "${MOUNTS[@]}" "${TC_OUT}/wasm-ld.wasm" \
 [[ -f "${WORK}/build/program.wasm" ]] || die "wasm-ld.wasm produced no program"
 
 log "running the program and its tests"
-output="$(wasmtime run "${WORK}/build/program.wasm")" || {
+# swift-testing reports its tests on stderr.
+output="$(wasmtime run "${WORK}/build/program.wasm" 2>&1)" || {
   printf '%s\n' "$output" >&2
   die "the program failed"
 }
@@ -176,7 +177,7 @@ log "macro smoke test passed: #stringify, @Observable, @Test and #expect expande
 # runtime libraries @Observable and @Test link (the frontend's own size is in
 # the build log; compare it with a default build's).
 log "download sizes (bytes: raw, gzip -9, brotli -q 11)"
-for file in "${TC_OUT}/swift-frontend.wasm" "${TC_OUT}/SwiftMacroPlugins.wasm" \
+for file in "${TC_OUT}/swift-frontend.wasm" "${TC_OUT}/SwiftMacroPlugins.wasm" "${WORK}/build/program.wasm" \
             "${STATIC_LIBS}/libTesting.a" "${STATIC_LIBS}/libswiftObservation.a"; do
   br="n/a"
   command -v brotli >/dev/null && br="$(brotli -c -q 11 "$file" | wc -c)"
