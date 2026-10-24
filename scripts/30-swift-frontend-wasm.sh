@@ -141,6 +141,10 @@ WRAPPER
     -DSWIFT_ENABLE_SWIFT_IN_SWIFT=ON
     -DBOOTSTRAPPING_MODE=HOSTTOOLS
     -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$native_tools"
+    # The Swift code is compiled against libc++ 21 headers and the C++ against
+    # libc++ 23, whose unstable ABI v2 layouts differ (std::vector, run 25):
+    # keep the bridging functions out of line, compiled by the C++ compiler only.
+    -DBRIDGING_MODE=PURE
     -DSWIFT_COMPILER_SOURCES_SDK_FLAGS="${compiler_sources_flags%;}"
   )
 fi

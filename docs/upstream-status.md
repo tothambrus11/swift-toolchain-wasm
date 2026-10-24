@@ -162,8 +162,13 @@ headers, and has to parse them with the clang inside the native `swiftc` (21.0).
 34's libc++ (23) needs clang 21.1 and does not build as a Clang module there; the Swift
 SDK's libc++ (21) is built without threads, which LLVM's headers need. Stage 30 compiles
 the Swift code against the Swift SDK's headers with `_LIBCPP_HAS_THREADS` set, and links
-it with wasi-sdk's libc++ like the rest of the compiler (`scripts/wasm-sdk.sh` says why
-that is sound). A Swift SDK built with threads would remove the overlay.
+it with wasi-sdk's libc++ like the rest of the compiler. That is only sound because the
+macros build sets `BRIDGING_MODE=PURE`: libc++'s ABI version 2 is its unstable ABI, and 23
+lays out `std::vector` differently from 21, so a bridging function inlined into Swift
+(the default `INLINE` mode) read a C++ vector with the wrong layout and crashed (run 25;
+`scripts/wasm-sdk.sh` has the details). In pure mode no libc++ object crosses into Swift.
+A Swift SDK built with threads and the same libc++ as wasi-sdk would remove both the
+overlay and the need for pure bridging.
 
 ## Two latent bugs found while auditing, neither reported upstream
 

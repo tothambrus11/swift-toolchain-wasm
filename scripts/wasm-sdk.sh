@@ -78,12 +78,18 @@ install_wasi_libc_modulemap() {
 #     the SDK does declare the pthread API, so turning threads on in the
 #     headers is all that is missing.
 #
-# Mixing libc++ versions this way is sound because nothing crosses between them
-# that could differ: both are ABI version 2 (std::__2), whose layouts libc++
-# keeps stable, and every inline libc++ function carries an ABI tag naming its
-# version (_LIBCPP_HIDE_FROM_ABI), so the two copies never merge at link time.
-# The non-inline symbols the Swift side references resolve to wasi-sdk's libc++,
-# the one the rest of the compiler links.
+# Mixing libc++ versions is sound only where no libc++ object crosses between
+# them. Layouts do differ: ABI version 2 is libc++'s *unstable* ABI, and 23
+# turns on changes 21 does not have (_LIBCPP_ABI_VECTOR_LAYOUT_SIZE_BASED, a
+# std::vector of begin, size and capacity). Run 25 compiled the bridging
+# functions inline into Swift (BRIDGING_MODE INLINE, the default for a release
+# build), so Swift read a std::vector<std::string> the C++ had built with 23's
+# layout through 21's, and crashed in SILFunction::hasSemanticsAttr. Stage 30
+# therefore builds with BRIDGING_MODE=PURE: the bridging functions are compiled
+# once, by the C++ compiler against wasi-sdk's libc++, and the Swift side sees
+# only plain bridged structs. Inline libc++ functions the Swift side still
+# instantiates carry an ABI tag naming their version (_LIBCPP_HIDE_FROM_ABI),
+# so the two copies never merge at link time.
 make_swift_host_sysroot() {
   local dest="$1" sdk="${WASM_SDK_BUNDLE}/WASI.sdk" entry
   rm -rf "$dest"
