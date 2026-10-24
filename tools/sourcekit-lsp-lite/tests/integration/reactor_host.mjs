@@ -4,8 +4,11 @@
 // for the browser pack and a test (node:wasi stands in for the browser's WASI
 // shim; the calls into the module are the same).
 //
-//   node reactor_host.mjs <reactor.wasm> [--dir guest=host ...] [--root /guest/project]
-//        [--file name ...] [--compile] [-- compiler args]
+//   node --no-turbo-fast-api-calls reactor_host.mjs <reactor.wasm> [--dir guest=host ...]
+//        [--root /guest/project] [--file name ...] [--compile] [-- compiler args]
+//
+// (Without that flag Node 22's node:wasi can segfault in a garbage collection
+// started inside its fd_pread fast call; see Stage 53.)
 //
 // Without --root it only checks the lifecycle (initialize, shutdown, exit),
 // which needs no sourcekitd answers. With --root it opens each --file, waits

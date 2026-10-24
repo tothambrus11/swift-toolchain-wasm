@@ -47,7 +47,13 @@ if command -v node >/dev/null; then
     extra=()
     [[ "$module" == swift-frontend-lsp ]] && extra=(--compile)
     log "${module}.wasm driven from JavaScript, one message per call ${extra[*]}"
-    node "${LITE}/tests/integration/reactor_host.mjs" "${TC_OUT}/${module}.wasm" \
+    # --no-turbo-fast-api-calls: Node 22's WASI (node:wasi) answers fd_pread
+    # through a V8 fast API call whose buffer allocation can start a garbage
+    # collection, which then walks the fast call's frame and segfaults in
+    # InnerPointerToCodeCache::GetCacheEntry (run 18, and locally with Node
+    # 22.22). A Node bug, not the module's: wasmtime and browser_wasi_shim
+    # run it fine. Plain calls avoid it.
+    node --no-turbo-fast-api-calls "${LITE}/tests/integration/reactor_host.mjs" "${TC_OUT}/${module}.wasm" \
       --dir "${PROJECT}=${PROJECT}" --dir "/sysroot=${SYSROOT}" --dir "/tmp=${WORK}/tmp" \
       --root "$PROJECT" --file main.swift --file Geometry.swift "${extra[@]}" -- "${COMPILER_ARGS[@]}" ||
       die "${module}.wasm failed (see above)"
