@@ -50,7 +50,30 @@ compiler reaches through its in-process plugin hook.
   the two tests; a second file must fail with the diagnostic its macro emits. The plugin
   host has its own unit tests (`node --test tools/plugin-host/test`).
 
-SIZES_PLACEHOLDER
+**What it costs** (bytes; run 28 against the build without macros of run 27, same sources):
+
+| File | Without macros | With macros | gzip -9 | brotli -q 11 |
+| --- | ---: | ---: | ---: | ---: |
+| `swift-frontend.wasm` | 152,712,190 (gzip 37,150,513) | 183,307,928 | 43,820,275 | 27,442,463 |
+| `sourcekitd-request.wasm` | 153,268,734 (gzip 37,332,856) | 183,891,832 | 44,036,719 | |
+| `swift-frontend-lsp.wasm` | 156,214,485 (gzip 38,085,817) | 186,839,190 | 44,780,361 | |
+| `SwiftMacroPlugins.wasm` | — | 13,334,459 | 3,390,708 | 2,216,399 |
+| `libTesting.a` (SDK) | — | 3,918,520 | 1,061,530 | 715,030 |
+| `libswiftObservation.a` (SDK) | — | 141,848 | 42,950 | 34,441 |
+
+So the compiler grows by 30.6 MB raw (+20%) and 6.7 MB gzipped (+18%); the plugins add
+3.4 MB gzipped (2.2 MB brotli), loaded only when a file uses a macro. The smoke test's
+program, which links swift-testing and with it Foundation and ICU, is 62 MB raw and
+20.5 MB gzipped: swift-testing needs FoundationEssentials and autolinks Foundation, so a
+sysroot that runs `@Test` code needs Foundation, which the core sysroot leaves out.
+
+**Built how.** ASTGen and swift-syntax compile for wasm32 unchanged. SwiftCompilerSources
+needs C++ interop on WASI (patch `0002`), three 32-bit hunks of swift#90326
+(`patches/swift-macros`), `BRIDGING_MODE=PURE` (its Swift is compiled against libc++ 21
+headers by the native `swiftc` while the C++ uses wasi-sdk's libc++ 23, and ABI v2 layouts
+differ between them; `scripts/wasm-sdk.sh`), and the build's own data generators run as
+wasm under wasmtime. [upstream-status.md](upstream-status.md#macros-on-a-wasi-host-added-2026-10-24-not-reported) lists
+every change.
 
 ## The 32-bit bugs that had to be fixed first
 
