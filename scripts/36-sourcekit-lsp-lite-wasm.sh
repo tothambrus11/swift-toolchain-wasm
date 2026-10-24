@@ -100,10 +100,12 @@ frontend_link_command="$(ninja -C "$SWIFT_BUILD" -t commands -s bin/swift-fronte
 
 # Rewrites sourcekitd-request's link: the server's objects instead of the
 # driver's, a new output, and for a reactor no main and -mexec-model=reactor.
-# Mode "combined" is a reactor that also takes every library and object of
+# Mode "combined" is a reactor that also takes every library of
 # swift-frontend's command (FRONTEND_LINK_COMMAND) that sourcekitd-request's
-# lacks, except its driver.cpp.o (main); flags only swift-frontend's command
-# has are printed, so a difference that matters can be seen. Of a compound
+# lacks. Not its objects: those are the tool's own, driver.cpp.o (main) and
+# swiftCompilerStub's stubs.cpp.o, whose initializeSwiftModules
+# libsourcekitdService.a already defines (taking both was a duplicate symbol,
+# run 17). Flags only swift-frontend's command has are printed, so a difference that matters can be seen. Of a compound
 # command only the link itself is kept (post-build copies are not ours to
 # run). Refuses anything it does not understand (a response file, two links
 # in one command) rather than guessing.
@@ -145,9 +147,9 @@ if mode == "combined":
     have = set(args)
     extra, flags_only_there = [], []
     for a in frontend[1:]:
-        if a.endswith("/driver.cpp.o") or a in have:
+        if a.endswith(".o") or a in have:
             continue
-        if a.endswith((".a", ".o")) or a.startswith(("-l", "-L")):
+        if a.endswith(".a") or a.startswith(("-l", "-L")):
             extra.append(a)
         else:
             flags_only_there.append(a)
