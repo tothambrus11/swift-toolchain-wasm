@@ -1,0 +1,41 @@
+diff --git a/stdlib/public/Platform/wasi-libc.modulemap b/stdlib/public/Platform/wasi-libc.modulemap
+index c4031b1..e007482 100644
+--- a/stdlib/public/Platform/wasi-libc.modulemap
++++ b/stdlib/public/Platform/wasi-libc.modulemap
+@@ -10,12 +10,19 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
+-module SwiftWASILibc [system] {
++// `no_undeclared_includes` is what makes C++ interoperability work. libc++
++// wraps several C headers (<inttypes.h>, <ctype.h>, ...) in modules of its own
++// that `#include_next` the libc header, which lives in this module. Without
++// the attribute, an include inside this module resolves to libc++'s wrapper
++// instead, and Clang reports "cyclic dependency in module 'SwiftWASILibc':
++// SwiftWASILibc -> std_inttypes_h -> SwiftWASILibc" for any Swift file that
++// imports a C++ header. The Emscripten module map got the same fix in
++// swiftlang/swift#90332.
++module SwiftWASILibc [system] [no_undeclared_includes] {
+   header "stdc-predef.h"
+   header "features.h"
+ 
+   // C standard library
+-  header "complex.h"
+   header "ctype.h"
+   header "errno.h"
+   header "fenv.h"
+@@ -68,6 +75,14 @@ module SwiftWASILibc [system] {
+   // WASI specific
+   header "wasi/api.h"
+   export *
++
++  // <complex.h> defines `complex` as a macro, which breaks libc++'s
++  // <complex> when the module is built in C++ mode. As an explicit submodule
++  // it is only built when something imports it by name.
++  explicit module Complex {
++    header "complex.h"
++    export *
++  }
+ }
+ 
+ module wasi_emulated_mman {
