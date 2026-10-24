@@ -17,8 +17,11 @@
 // instantiates the same compiled module again and compiles the files to an
 // object with swift_frontend_main, as a browser's runner would.
 
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { WASI } from 'node:wasi';
+import { SwiftPluginHost } from '../../../plugin-host/swift-plugin-host.mjs';
 
 const argv = process.argv.slice(2);
 const wasmPath = argv.shift();
@@ -40,7 +43,30 @@ for (let i = 0; i < argv.length; i++) {
 const wasi = new WASI({ version: 'preview1', args: ['sourcekit-lsp-lite'], env: { TMPDIR: '/tmp' }, preopens });
 const t0 = performance.now();
 const module = await WebAssembly.compile(await readFile(wasmPath));
-const instance = await WebAssembly.instantiate(module, wasi.getImportObject());
+
+// A module built with macro support (patch 0003) imports its plugin server
+// from the embedder: give each instance a SwiftPluginHost, which loads the wasm
+// plugins the compiler names from the same directories the module sees.
+const needsPluginHost = WebAssembly.Module.imports(module).some((i) => i.module === 'swift_plugin_host');
+function hostPathOf(guestPath) {
+    const guest = Object.keys(preopens)
+        .filter((g) => guestPath === g || guestPath.startsWith(g.endsWith('/') ? g : `${g}/`))
+        .sort((a, b) => b.length - a.length)[0];
+    if (guest === undefined) throw new Error(`'${guestPath}' is outside every --dir`);
+    return path.join(preopens[guest], path.posix.relative(guest, guestPath));
+}
+function instantiate(imports) {
+    if (!needsPluginHost) return { instance: new WebAssembly.Instance(module, imports), host: null };
+    const host = new SwiftPluginHost({
+        loadPlugin: (libraryPath) => readFileSync(hostPathOf(libraryPath)),
+        onStderr: (name, text) => process.stderr.write(`[${name}] ${text}`),
+    });
+    const instance = new WebAssembly.Instance(module, { ...imports, ...host.imports });
+    host.attach(instance.exports.memory);
+    return { instance, host };
+}
+
+const { instance } = instantiate(wasi.getImportObject());
 wasi.initialize(instance); // runs _initialize: the reactor's constructors
 const lsp = instance.exports;
 console.log(`instantiated in ${Math.round(performance.now() - t0)} ms`);
@@ -126,7 +152,7 @@ if (compile) {
     // instance (src/frontend.cpp says why).
     const started = performance.now();
     const cwasi = new WASI({ version: 'preview1', args: ['swift-frontend'], env: { TMPDIR: '/tmp' }, preopens, returnOnExit: true });
-    const compiler = await WebAssembly.instantiate(module, cwasi.getImportObject());
+    const { instance: compiler } = instantiate(cwasi.getImportObject());
     cwasi.initialize(compiler);
     const fe = compiler.exports;
     check(typeof fe.swift_frontend_main === 'function', 'the module exports swift_frontend_main');

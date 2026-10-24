@@ -69,8 +69,13 @@ cat > "${WORK}/requests/cursor.yaml" <<YAML
 }
 YAML
 
+# A macro-enabled build imports the plugin host (patch 0003); stub it out.
+mapfile -t stub_args < <(plugin_host_stub_args "${TC_OUT}/sourcekitd-request.wasm")
+[[ ${#stub_args[@]} -eq 0 || "$runtime" == wasmtime ]] ||
+  die "sourcekitd-request.wasm imports swift_plugin_host, which needs wasmtime's --preload"
+
 request() {
-  "$runtime" run --dir "${WORK}::/work" --dir "${SYSROOT}::/sysroot" \
+  "$runtime" run "${stub_args[@]}" --dir "${WORK}::/work" --dir "${SYSROOT}::/sysroot" \
     "${TC_OUT}/sourcekitd-request.wasm" "$@"
 }
 

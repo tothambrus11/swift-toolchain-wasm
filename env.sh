@@ -36,3 +36,14 @@ mkdir -p "$TC_SRC" "$TC_BUILD" "$TC_OUT"
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33m warning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m error:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# wasmtime arguments that let a module built with macro support (it imports
+# "swift_plugin_host", patch 0003) start without a JavaScript embedder: the
+# no-plugins stub answers every plugin message with a failure, so the module
+# works for code that uses no macros. Prints nothing for a module that does not
+# import the plugin host. Usage: wasmtime run $(plugin_host_stub_args M) M ...
+plugin_host_stub_args() {
+  if LC_ALL=C grep -q -a -F swift_plugin_host "$1"; then
+    printf '%s\n' --preload "swift_plugin_host=${TOOLCHAIN_ROOT}/tools/plugin-host/no-plugins.wat"
+  fi
+}

@@ -32,7 +32,8 @@ COMPILER_ARGS=(-target wasm32-unknown-wasip1 -sdk /sysroot/wasi-sysroot
   -resource-dir /sysroot/swift/lib/swift_static -module-cache-path /tmp/mcache)
 
 # The project at the same path inside as outside, so URIs need no mapping.
-server_cmd="wasmtime run --dir ${PROJECT}::${PROJECT} --dir ${SYSROOT}::/sysroot --dir ${WORK}/tmp::/tmp"
+# A macro-enabled build imports the plugin host (patch 0003); stub it out.
+server_cmd="wasmtime run $(plugin_host_stub_args "${TC_OUT}/sourcekit-lsp-lite.wasm" | tr '\n' ' ')--dir ${PROJECT}::${PROJECT} --dir ${SYSROOT}::/sysroot --dir ${WORK}/tmp::/tmp"
 server_cmd+=" --env TMPDIR=/tmp ${TC_OUT}/sourcekit-lsp-lite.wasm --log -- ${COMPILER_ARGS[*]}"
 
 log "LSP scenarios against sourcekit-lsp-lite.wasm under wasmtime"
