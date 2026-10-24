@@ -83,7 +83,7 @@ platform, so the rot went unnoticed. Two-line fix, unreported upstream.
 
 ### SourceKit on a WASI host (added 2026-10-23, not reported)
 
-Twelve files, all new territory: upstream builds no SourceKit for any wasm host. `main`'s
+Thirteen files, all new territory: upstream builds no SourceKit for any wasm host. `main`'s
 `cmake/caches/Runtime-WASI-wasm32.cmake` sets `SWIFT_BUILD_SOURCEKIT NO`, and neither
 `tools/SourceKit` nor `SWIFT_BUILD_HOST_DISPATCH` on `main` mentions WASI or Emscripten.
 
@@ -96,6 +96,7 @@ Twelve files, all new territory: upstream builds no SourceKit for any wasm host.
 | `sourcekitdInProc.cpp`, `sourcekitdAPI-Common.cpp` | No `dladdr`. |
 | `sourcekitd/lib/Service/Requests.cpp` | No `dispatch_after`. |
 | `tools/SourceKit/tools/CMakeLists.txt`, `sourcekitd-request/` (new) | A driver that runs without processes or threads. |
+| `tools/SourceKit/lib/SwiftLang/SwiftSourceDocInfo.cpp` | `relatedidents` without swift-syntax. Upstream's `#if !SWIFT_BUILD_SWIFT_SYNTAX` arm builds an error result and never passes it to the receiver, so the request never answers: a hang with libdispatch, a fatal "Semaphore::wait would block forever" here. Nothing in it needs swift-syntax except argument labels: `localRenameLocs` is plain AST indexing, so the patch keeps it and takes each base-name token's range from the lexer. A bug on every host built without swift-syntax; worth reporting with the fix. |
 
 The cooperative queues are the part with a future upstream: libdispatch `main` has
 started on a single-threaded backend of its own (PassiveLogic's "prepare cooperative event

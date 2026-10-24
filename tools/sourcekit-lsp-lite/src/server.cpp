@@ -255,7 +255,7 @@ void Server::dispatchRequest(const json::Value &Id, const std::string &Method,
       {"textDocument/documentSymbol", &Server::documentSymbol},
       {"textDocument/signatureHelp", &Server::signatureHelp},
   }};
-  const auto H = std::find_if(Handlers.begin(), Handlers.end(),
+  const auto *const H = std::find_if(Handlers.begin(), Handlers.end(),
                               [&](const auto &Entry) { return Entry.first == Method; });
   if (H == Handlers.end())
     replyError(Id, MethodNotFound, "unsupported method: " + Method);

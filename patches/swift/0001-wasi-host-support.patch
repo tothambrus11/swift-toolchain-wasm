@@ -871,6 +871,83 @@ index 00000000..9180f1fe
 +    ++Ran;
 +  return Ran;
 +}
+diff --git a/tools/SourceKit/lib/SwiftLang/SwiftSourceDocInfo.cpp b/tools/SourceKit/lib/SwiftLang/SwiftSourceDocInfo.cpp
+index 34caf4b5..4b57e8af 100644
+--- a/tools/SourceKit/lib/SwiftLang/SwiftSourceDocInfo.cpp
++++ b/tools/SourceKit/lib/SwiftLang/SwiftSourceDocInfo.cpp
+@@ -2590,7 +2590,6 @@ void SwiftLangSupport::findRelatedIdentifiersInFile(
+ 
+     bool requiresDeepStack() override { return true; }
+ 
+-#if SWIFT_BUILD_SWIFT_SYNTAX
+     // FIXME: Don't silently eat errors here.
+     RelatedIdentsResult getRelatedIdents(SourceFile *SrcFile,
+                                          CompilerInstance &CompInst) {
+@@ -2642,6 +2641,8 @@ void SwiftLangSupport::findRelatedIdentifiersInFile(
+       }
+ #endif
+ 
++      SmallVector<RelatedIdentInfo, 8> Ranges;
++#if SWIFT_BUILD_SWIFT_SYNTAX
+       // Ignore any errors produced by `resolveRenameLocations` since, if some
+       // symbol failed to resolve, we still want to return all the other
+       // symbols. This makes related idents more fault-tolerant.
+@@ -2651,7 +2652,6 @@ void SwiftLangSupport::findRelatedIdentifiersInFile(
+           resolveRenameLocations(Locs.getLocations(), /*NewName=*/StringRef(),
+                                  *SrcFile, Diags);
+ 
+-      SmallVector<RelatedIdentInfo, 8> Ranges;
+       for (auto Loc : ResolvedAndRenameLocs) {
+         if (Loc.resolved.range.isInvalid()) {
+           continue;
+@@ -2661,10 +2661,25 @@ void SwiftLangSupport::findRelatedIdentifiersInFile(
+         Ranges.push_back(
+             {Offset, Loc.resolved.range.getByteLength(), Loc.renameLoc.Usage});
+       }
++#else
++      // Without swift-syntax there is no name matcher to find argument labels,
++      // but the base name is all a related identifier is: the token at the
++      // location the indexer reported.
++      for (const RenameLoc &Loc : Locs.getLocations()) {
++        SourceLoc Start =
++            SrcMgr.getLocForLineCol(BufferID, Loc.Line, Loc.Column);
++        if (Start.isInvalid()) {
++          continue;
++        }
++        CharSourceRange Range =
++            Lexer::getCharSourceRangeFromSourceRange(SrcMgr, Start);
++        Ranges.push_back({SrcMgr.getLocOffsetInBuffer(Start, BufferID),
++                          Range.getByteLength(), Loc.Usage});
++      }
++#endif
+ 
+       return RelatedIdentsResult(Ranges, OldName);
+     }
+-#endif
+ 
+   public:
+     RelatedIdConsumer(
+@@ -2678,12 +2693,6 @@ void SwiftLangSupport::findRelatedIdentifiersInFile(
+ 
+     void handlePrimaryAST(ASTUnitRef AstUnit) override {
+       using ResultType = RequestResult<RelatedIdentsResult>;
+-#if !SWIFT_BUILD_SWIFT_SYNTAX
+-      ResultType::fromError(
+-          "relatedidents is not supported because sourcekitd was built without "
+-          "swift-syntax");
+-      return;
+-#else
+       auto &CompInst = AstUnit->getCompilerInstance();
+ 
+       auto *SrcFile = retrieveInputFile(InputFile, CompInst);
+@@ -2695,7 +2704,6 @@ void SwiftLangSupport::findRelatedIdentifiersInFile(
+ 
+       RelatedIdentsResult Result = getRelatedIdents(SrcFile, CompInst);
+       Receiver(ResultType::fromResult(Result));
+-#endif
+     }
+ 
+     void cancelled() override {
 diff --git a/tools/SourceKit/tools/CMakeLists.txt b/tools/SourceKit/tools/CMakeLists.txt
 index 86881a56..77ca0410 100644
 --- a/tools/SourceKit/tools/CMakeLists.txt

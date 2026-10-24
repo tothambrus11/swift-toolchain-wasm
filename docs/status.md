@@ -140,7 +140,7 @@ drives the reactor from Node. Both are optional: a failure warns and the toolcha
 | `hover` | `cursorinfo`: the annotated declaration and the doc comment, as Markdown |
 | `definition` | `cursorinfo`'s `key.filepath` + `key.offset` (or its module name for SDK symbols, which yield nothing) |
 | `references` | `cursorinfo` for the USR, then in every project file `cursorinfo` on textual occurrences of the name until one has that USR, then `relatedidents` from there |
-| `documentHighlight` | `relatedidents` |
+| `documentHighlight` | `relatedidents` (base names only: without swift-syntax there is no name matcher for argument labels) |
 | `documentSymbol` | a throwaway `editor.open` with substructure, mapped to a `DocumentSymbol` tree |
 | `signatureHelp` | `signaturehelp` |
 
