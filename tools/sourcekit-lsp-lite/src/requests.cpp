@@ -84,4 +84,11 @@ json::Value signatureHelp(std::string_view Path, ByteOffset At, std::span<const 
   return located("source.request.signaturehelp", Path, At, Args);
 }
 
+json::Value variableTypes(std::string_view Path, ByteOffset At, std::size_t Length,
+                          std::span<const std::string> Args) {
+  json::Value R = located("source.request.variable.type", Path, At, Args);
+  R.set("key.length", json::Value::count(Length)).set("key.fully_qualified", 0);
+  return R;
+}
+
 } // namespace lite::requests

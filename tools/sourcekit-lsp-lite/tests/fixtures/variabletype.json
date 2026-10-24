@@ -1,0 +1,47 @@
+{
+ "recorded": "sourcekitd (Swift 6.4.1, x86_64 Linux) via SOURCEKIT_LSP_LITE_RECORD, project paths replaced by /project",
+ "text": "let a = Point(x: 0, y: 0)\nlet n: Int = 3\nvar xs = [1, 2].map { $0 * 2 }\nlet bad: Int = a.norm()\n",
+ "request": {
+  "key.request": "source.request.variable.type",
+  "key.sourcefile": "/project/main.swift",
+  "key.offset": 0,
+  "key.compilerargs": [
+   "/project/Geometry.swift",
+   "/project/main.swift",
+   "-module-name",
+   "main",
+   "-vfsoverlay",
+   "/tmp/sourcekit-lsp-lite-15097721790058/overlay.yaml"
+  ],
+  "key.length": 96,
+  "key.fully_qualified": 0
+ },
+ "response": {
+  "key.variable_type_list": [
+   {
+    "key.variable_offset": 4,
+    "key.variable_length": 1,
+    "key.variable_type": "Point",
+    "key.variable_type_explicit": false
+   },
+   {
+    "key.variable_offset": 30,
+    "key.variable_length": 1,
+    "key.variable_type": "Int",
+    "key.variable_type_explicit": true
+   },
+   {
+    "key.variable_offset": 45,
+    "key.variable_length": 2,
+    "key.variable_type": "[Int]",
+    "key.variable_type_explicit": false
+   },
+   {
+    "key.variable_offset": 76,
+    "key.variable_length": 3,
+    "key.variable_type": "Int",
+    "key.variable_type_explicit": true
+   }
+  ]
+ }
+}

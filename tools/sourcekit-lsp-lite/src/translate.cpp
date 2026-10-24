@@ -76,6 +76,70 @@ json::Value markdown(std::string Text) {
   return M;
 }
 
+/// Editor placeholders in a fix-it, "<#code#>" or "<#T##Int#>", as their
+/// plain names: a client that applies the edit should not get the markers.
+std::string withoutPlaceholders(std::string_view Text) {
+  std::string Out;
+  while (true) {
+    const std::size_t Open = Text.find("<#");
+    const std::size_t Close = Open == std::string_view::npos ? Open : Text.find("#>", Open);
+    if (Close == std::string_view::npos) {
+      Out += Text;
+      return Out;
+    }
+    Out += Text.substr(0, Open);
+    std::string_view Inner = Text.substr(Open + 2, Close - Open - 2);
+    if (Inner.starts_with("T##"))
+      Inner.remove_prefix(3);
+    Out += Inner.substr(0, Inner.find("##"));
+    Text.remove_prefix(Close + 2);
+  }
+}
+
+/// "Insert 'Int('", "Remove 'x'", "Replace 'a' with 'b'", and for several
+/// edits the phrases joined: how the edit reads in a menu of quick fixes.
+std::string fixitTitle(const json::Value &Fixits, std::string_view Text) {
+  std::string Title;
+  for (const json::Value &F : Fixits.elements()) {
+    const ByteRange R = clamp(rangeIn(F), Text.size());
+    const std::string Old(Text.substr(R.Begin.Value, R.End.Value - R.Begin.Value));
+    const std::string New = withoutPlaceholders(F["key.sourcetext"].asString());
+    if (!Title.empty())
+      Title += ", ";
+    if (Old.empty())
+      Title.append("insert '").append(New).append("'");
+    else if (New.empty())
+      Title.append("remove '").append(Old).append("'");
+    else
+      Title.append("replace '").append(Old).append("' with '").append(New).append("'");
+  }
+  if (!Title.empty())
+    Title[0] = static_cast<char>(Title[0] - 'a' + 'A');
+  return Title;
+}
+
+/// A quick fix applying \p Fixits (byte ranges in \p Path).
+json::Value fixAction(std::string Title, const json::Value &Fixits, const std::string &Path,
+                      FileSource &Files, Encoding Enc) {
+  const std::string Text = Files.text(Path).value_or(std::string());
+  const LineTable Lines(Text);
+  const DocumentView Doc(Text, Lines, Enc);
+  json::Value Edits = json::Value::array();
+  for (const json::Value &F : Fixits.elements()) {
+    json::Value E = json::Value::object();
+    E.set("range", Doc.range(clamp(rangeIn(F), Text.size())))
+        .set("newText", withoutPlaceholders(F["key.sourcetext"].asString()));
+    Edits.push(std::move(E));
+  }
+  json::Value Changes = json::Value::object();
+  Changes.set(Files.uri(Path), std::move(Edits));
+  json::Value Edit = json::Value::object();
+  Edit.set("changes", std::move(Changes));
+  json::Value Action = json::Value::object();
+  Action.set("title", std::move(Title)).set("kind", "quickfix").set("edit", std::move(Edit));
+  return Action;
+}
+
 void appendSymbols(const json::Value &Structure, const DocumentView &Doc, json::Value &Out) {
   for (const json::Value &S : Structure.elements()) {
     const std::string &KindName = S["key.kind"].asString();
@@ -184,6 +248,36 @@ json::Value diagnostics(const json::Value &Response, const std::string &Path,
     }
     if (Related.size() > 0)
       Diag.set("relatedInformation", std::move(Related));
+
+    json::Value Actions = json::Value::array();
+    if (D["key.fixits"].size() > 0) {
+      json::Value Own = fixAction(fixitTitle(D["key.fixits"], Doc.text()), D["key.fixits"], Path,
+                                  Files, Doc.encoding());
+      Own.set("isPreferred", true);
+      Actions.push(std::move(Own));
+    }
+    for (const json::Value &Note : D["key.diagnostics"].elements()) {
+      if (Note["key.fixits"].size() == 0)
+        continue;
+      const std::string &NoteFile = Note["key.filepath"].asString();
+      std::string Title = Note["key.description"].asString();
+      if (!Title.empty() && Title[0] >= 'a' && Title[0] <= 'z')
+        Title[0] = static_cast<char>(Title[0] - 'a' + 'A');
+      Actions.push(fixAction(std::move(Title), Note["key.fixits"],
+                             NoteFile.empty() ? Path : NoteFile, Files, Doc.encoding()));
+    }
+    if (Actions.size() > 0) {
+      // Each action names the diagnostic it fixes (without the actions).
+      json::Value Fixed = json::Value::array();
+      Fixed.push(Diag);
+      json::Value Named = json::Value::array();
+      for (const json::Value &A : Actions.elements()) {
+        json::Value Copy = A;
+        Copy.set("diagnostics", Fixed);
+        Named.push(std::move(Copy));
+      }
+      Diag.set("codeActions", std::move(Named));
+    }
     List.push(std::move(Diag));
   }
   return List;
@@ -523,6 +617,42 @@ json::Value renameEdit(std::span<const Occurrence> Occurrences, std::string_view
   json::Value Result = json::Value::object();
   Result.set("changes", std::move(Changes));
   return Result;
+}
+
+json::Value inlayHints(const json::Value &Response, const DocumentView &Doc) {
+  constexpr int InlayHintType = 1;
+  json::Value Hints = json::Value::array();
+  for (const json::Value &V : Response["key.variable_type_list"].elements()) {
+    if (V["key.variable_type_explicit"].asBool() || V["key.variable_type"].asString().empty())
+      continue;
+    const ByteRange Name =
+        clamp(rangeIn(V, "key.variable_offset", "key.variable_length"), Doc.text().size());
+    json::Value H = json::Value::object();
+    H.set("position", Doc.position(Name.End))
+        .set("label", ": " + V["key.variable_type"].asString())
+        .set("kind", InlayHintType);
+    Hints.push(std::move(H));
+  }
+  return Hints;
+}
+
+json::Value codeActions(const json::Value &Params) {
+  json::Value Actions = json::Value::array();
+  const auto &Only = Params["context"]["only"].elements();
+  if (!Only.empty() && std::none_of(Only.begin(), Only.end(), [](const json::Value &K) {
+        return K.asString() == "quickfix" || K.asString().empty();
+      }))
+    return Actions;
+  std::vector<std::string> Seen;
+  for (const json::Value &D : Params["context"]["diagnostics"].elements())
+    for (const json::Value &A : D["codeActions"].elements()) {
+      std::string Key = json::serialize(A["edit"]) + A["title"].asString();
+      if (std::find(Seen.begin(), Seen.end(), Key) != Seen.end())
+        continue;
+      Seen.push_back(std::move(Key));
+      Actions.push(A);
+    }
+  return Actions;
 }
 
 int completionKind(std::string_view Kind) noexcept {

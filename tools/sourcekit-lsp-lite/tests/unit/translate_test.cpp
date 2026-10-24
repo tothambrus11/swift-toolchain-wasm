@@ -288,6 +288,61 @@ TEST_SUITE("translate") {
     CHECK_FALSE(E["changes"].has("file:///p/gone.swift"));
   }
 
+  TEST_CASE("inlay hints name the inferred types and skip the annotated ones") {
+    const Fixture F = load("variabletype");
+    const DocumentView Doc(F.Text, F.Lines, Encoding::UTF16);
+    const json::Value H = inlayHints(F.Response, Doc);
+    REQUIRE(H.size() == 2);
+    CHECK(H[std::size_t{0}]["label"].asString() == ": Point");
+    CHECK(H[std::size_t{0}]["position"]["line"].asInt() == 0);
+    CHECK(H[std::size_t{0}]["position"]["character"].asInt() == 5); // after "a"
+    CHECK(H[std::size_t{1}]["label"].asString() == ": [Int]");
+    CHECK(H[std::size_t{1}]["position"]["line"].asInt() == 2);
+    CHECK(H[std::size_t{1}]["position"]["character"].asInt() == 6); // after "xs"
+    CHECK(H[std::size_t{1}]["kind"].asInt() == 1);
+  }
+
+  TEST_CASE("fix-its become quick fixes on their diagnostics, and come back as code actions") {
+    const Fixture F = load("diagnostics_fixits");
+    FakeFiles Files;
+    Files.Texts["/project/main.swift"] = F.Text;
+    const DocumentView Doc(F.Text, F.Lines, Encoding::UTF16);
+    const json::Value D = diagnostics(F.Response, "/project/main.swift", Doc, Files);
+    REQUIRE(D.size() == 2);
+    // The note's fix-it: titled by the note, placeholders as plain names.
+    const json::Value &Stubs = D[std::size_t{0}]["codeActions"][std::size_t{0}];
+    CHECK(Stubs["title"].asString() == "Add stubs for conformance");
+    CHECK(Stubs["kind"].asString() == "quickfix");
+    const json::Value &Insert =
+        Stubs["edit"]["changes"]["file:///project/main.swift"][std::size_t{0}];
+    CHECK(Insert["newText"].asString().find("func area() -> Double") != std::string::npos);
+    CHECK(Insert["newText"].asString().find("<#") == std::string::npos);
+    CHECK(Insert["range"]["start"]["line"].asInt() == 1);
+    CHECK(Stubs["diagnostics"][std::size_t{0}]["message"].asString() ==
+          D[std::size_t{0}]["message"].asString());
+    CHECK_FALSE(Stubs["diagnostics"][std::size_t{0}].has("codeActions"));
+    // The diagnostic's own fix-its: one preferred action, titled by the edit.
+    const json::Value &Convert = D[std::size_t{1}]["codeActions"][std::size_t{0}];
+    CHECK(Convert["title"].asString() == "Insert 'Int(', insert ')'");
+    CHECK(Convert["isPreferred"].asBool());
+    CHECK(Convert["edit"]["changes"]["file:///project/main.swift"].size() == 2);
+
+    json::Value Params = json::Value::object();
+    json::Value Context = json::Value::object();
+    json::Value Sent = json::Value::array();
+    Sent.push(D[std::size_t{0}]);
+    Sent.push(D[std::size_t{1}]);
+    Sent.push(D[std::size_t{1}]); // the same diagnostic twice: its fix once
+    Context.set("diagnostics", Sent);
+    Params.set("context", Context);
+    CHECK(codeActions(Params).size() == 2);
+    json::Value Only = json::Value::array();
+    Only.push("refactor");
+    Context.set("only", Only);
+    Params.set("context", Context);
+    CHECK(codeActions(Params).size() == 0);
+  }
+
   TEST_CASE("kinds map to LSP's enumerations") {
     CHECK(completionKind("source.lang.swift.decl.function.method.instance") == 2);
     CHECK(completionKind("source.lang.swift.decl.function.free") == 3);

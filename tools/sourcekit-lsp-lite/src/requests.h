@@ -49,4 +49,10 @@ namespace lite::requests {
 [[nodiscard]] json::Value signatureHelp(std::string_view Path, ByteOffset At,
                                         std::span<const std::string> Args);
 
+/// The types of the variables declared in \p Length bytes from \p At (what
+/// SourceKit-LSP's inlay hints come from), as written in the source, not
+/// fully qualified.
+[[nodiscard]] json::Value variableTypes(std::string_view Path, ByteOffset At, std::size_t Length,
+                                        std::span<const std::string> Args);
+
 } // namespace lite::requests

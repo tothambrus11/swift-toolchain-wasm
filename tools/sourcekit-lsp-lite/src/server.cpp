@@ -21,6 +21,9 @@
 //                               base names only (see renameNameProblem)
 //   documentSymbol              editor.open of a scratch copy, substructure
 //   signatureHelp               signaturehelp
+//   inlayHint                   variable.type (inferred types)
+//   codeAction                  the fix-its carried by the diagnostics the
+//                               client sends back (no request)
 
 #include "server.h"
 
@@ -248,6 +251,10 @@ void Server::dispatchRequest(const json::Value &Id, const std::string &Method,
     reply(Id, json::Value());
     return;
   }
+  if (Method == "textDocument/codeAction") {
+    reply(Id, codeActions(Params)); // from the diagnostics it carries; no sourcekitd request
+    return;
+  }
   if (Method == "textDocument/prepareRename" || Method == "textDocument/rename") {
     std::string Refusal;
     json::Value Result =
@@ -259,7 +266,7 @@ void Server::dispatchRequest(const json::Value &Id, const std::string &Method,
     return;
   }
   using Handler = json::Value (Server::*)(const json::Value &);
-  static constexpr std::array<std::pair<std::string_view, Handler>, 7> Handlers{{
+  static constexpr std::array<std::pair<std::string_view, Handler>, 8> Handlers{{
       {"textDocument/completion", &Server::completion},
       {"textDocument/hover", &Server::hover},
       {"textDocument/definition", &Server::definition},
@@ -267,6 +274,7 @@ void Server::dispatchRequest(const json::Value &Id, const std::string &Method,
       {"textDocument/documentHighlight", &Server::documentHighlight},
       {"textDocument/documentSymbol", &Server::documentSymbol},
       {"textDocument/signatureHelp", &Server::signatureHelp},
+      {"textDocument/inlayHint", &Server::inlayHint},
   }};
   // A loop, not std::find_if: see decodeEntitiesInto in text.cpp.
   for (const auto &[Name, Handle] : Handlers)
@@ -323,6 +331,8 @@ json::Value Server::initialize(const json::Value &Params) {
   Completion.set("triggerCharacters", stringArray({"."})).set("resolveProvider", false);
   json::Value Signature = json::Value::object();
   Signature.set("triggerCharacters", stringArray({"(", ","}));
+  json::Value Actions = json::Value::object();
+  Actions.set("codeActionKinds", stringArray({"quickfix"}));
   json::Value Rename = json::Value::object();
   Rename.set("prepareProvider", true);
   json::Value Capabilities = json::Value::object();
@@ -335,6 +345,8 @@ json::Value Server::initialize(const json::Value &Params) {
       .set("documentHighlightProvider", true)
       .set("documentSymbolProvider", true)
       .set("renameProvider", std::move(Rename))
+      .set("inlayHintProvider", true)
+      .set("codeActionProvider", std::move(Actions))
       .set("signatureHelpProvider", std::move(Signature));
   json::Value Info = json::Value::object();
   Info.set("name", "sourcekit-lsp-lite").set("version", "0.1.0");
@@ -675,6 +687,18 @@ json::Value Server::signatureHelp(const json::Value &Params) {
   const ByteOffset At = Doc->view(Enc).offsetOf(Params["position"]);
   const skd::Reply R = send(requests::signatureHelp(Doc->Path, At, compilerArgs()));
   return R.OK ? lite::signatureHelp(R.Value, Enc) : json::Value();
+}
+
+json::Value Server::inlayHint(const json::Value &Params) {
+  const Document *Doc = document(Params);
+  if (Doc == nullptr)
+    return json::Value::array();
+  const DocumentView View = Doc->view(Enc);
+  const ByteOffset Begin = View.offsetOf(Params["range"]["start"]);
+  const ByteOffset End = std::max(Begin, View.offsetOf(Params["range"]["end"]));
+  const skd::Reply R =
+      send(requests::variableTypes(Doc->Path, Begin, End.Value - Begin.Value, compilerArgs()));
+  return R.OK ? inlayHints(R.Value, View) : json::Value::array();
 }
 
 json::Value Server::prepareRename(const json::Value &Params, std::string &Refusal) {

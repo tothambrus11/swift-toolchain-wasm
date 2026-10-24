@@ -144,6 +144,8 @@ drives the reactor from Node. Both are optional: a failure warns and the toolcha
 | `prepareRename` / `rename` | `cursorinfo` for the symbol (refused, with the reason as a `RequestFailed` message, for the standard library, modules, initializers, subscripts and operators), then the occurrences `references` finds, every candidate resolved; each base-name range is checked to still spell the old name before it is rewritten. A new name with argument labels (`moved(to:)`) is refused: renaming labels needs swift-syntax's name matcher, which this build does not have |
 | `documentSymbol` | a throwaway `editor.open` with substructure, mapped to a `DocumentSymbol` tree |
 | `signatureHelp` | `signaturehelp` |
+| `inlayHint` | `variable.type` over the range: `: Type` after each variable whose type is inferred |
+| `codeAction` | no request: each published diagnostic carries its fix-its as quick fixes in `codeActions` (clangd's extension, as SourceKit-LSP does), the diagnostic's own as one preferred action titled by its edit, each note's titled by the note; the server returns those of the diagnostics the client sends back, so an edit is always the one computed for the text the client saw |
 
 Positions are UTF-16 code units unless the client offers `utf-8` in
 `general.positionEncodings`; a line table converts them to sourcekitd's UTF-8 byte offsets
@@ -168,8 +170,8 @@ its mirror (`use-external-names: false`). On WASI the shadow directory is create
 * **No build system.** No SwiftPM, no `compile_commands.json`, no multiple modules: one
   module, the files the server scanned, the arguments the client sent.
 * **Rename covers base names only** (above), and there is **no formatting, semantic
-  tokens, code actions or fix-its, inlay hints, folding ranges, generated interfaces, or
-  macro expansion** (macros cannot run on WASI anyway).
+  tokens, refactoring actions, folding ranges, generated interfaces, or macro expansion**
+  (macros cannot run on WASI anyway).
 * **No cancellation and no concurrency.** One request at a time; `$/cancelRequest` is
   ignored, and a slow answer holds the next message.
 * **No `completionItem/resolve`.** Items carry their documentation brief up front.
@@ -231,7 +233,7 @@ does not pile up between requests; no C entry point was needed.
 Leak and UndefinedBehavior sanitizers), `tidy` (clang-tidy as errors during the build,
 `.clang-tidy`), `cppcheck`, and `release`. ctest runs the doctest unit tests (JSON, text
 and position conversion, framing, options, request building, and translation of recorded
-sourcekitd responses in `tests/fixtures`), the reactor driven in process, and fourteen LSP
+sourcekitd responses in `tests/fixtures`), the reactor driven in process, and sixteen LSP
 scenarios over stdio against `tests/project`. [`lsp-lite.yml`](../.github/workflows/lsp-lite.yml)
 runs all of it, plus a wasm compile with the same warnings.
 

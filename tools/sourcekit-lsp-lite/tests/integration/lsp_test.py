@@ -248,7 +248,7 @@ def lifecycle(args, scratch):
         caps = s_init["capabilities"]
         for provider in ["completionProvider", "hoverProvider", "definitionProvider",
                          "referencesProvider", "documentSymbolProvider", "signatureHelpProvider",
-                         "renameProvider"]:
+                         "renameProvider", "inlayHintProvider", "codeActionProvider"]:
             check(provider in caps, f"initialize advertises {provider}", caps)
         check(caps["positionEncoding"] == "utf-16", "UTF-16 positions unless the client offers UTF-8", caps)
         check(s_init["serverInfo"]["name"] == "sourcekit-lsp-lite", "the server says what it is", s_init)
@@ -447,6 +447,35 @@ def rename(args, scratch):
     s.finish()
 
 
+def inlay_hints(args, scratch):
+    s = Session(args, scratch)
+    s.open_all()
+    got = s.client.result("textDocument/inlayHint", {"textDocument": {"uri": s.uri("main.swift")},
+                                                     "range": {"start": {"line": 0, "character": 0},
+                                                               "end": {"line": 4, "character": 0}}},
+                          "inlay hints")
+    where = [(h["position"]["line"], h["position"]["character"], h["label"]) for h in got]
+    check(where == [(0, 5, ": Point"), (1, 5, ": Point")], "a and b are inferred Points", where)
+    s.finish()
+
+
+def code_actions(args, scratch):
+    s = Session(args, scratch)
+    s.open_all()
+    since = s.replace("main.swift", s.files["main.swift"] + "let n: Int = b.norm()\n")
+    diags = errors(s.diagnostics("main.swift", since))
+    check(len(diags) == 1 and diags[0].get("codeActions"), "the type error carries a fix", diags)
+    got = s.client.result("textDocument/codeAction", {
+        "textDocument": {"uri": s.uri("main.swift")}, "range": diags[0]["range"],
+        "context": {"diagnostics": diags}}, "code actions")
+    check(len(got) == 1 and got[0]["kind"] == "quickfix" and got[0]["title"].startswith("Insert 'Int('"),
+          "a quick fix wraps the value in Int(...)", got)
+    since = s.replace("main.swift", apply_edits(s.files["main.swift"], got[0]["edit"]["changes"][s.uri("main.swift")]))
+    check("Int(b.norm())" in s.files["main.swift"] and not errors(s.diagnostics("main.swift", since)),
+          "applying it fixes the error", s.files["main.swift"])
+    s.finish()
+
+
 def symbols(args, scratch):
     s = Session(args, scratch)
     s.open_all()
@@ -576,6 +605,8 @@ SCENARIOS: dict[str, Callable] = {
     "highlights": highlights,
     "symbols": symbols,
     "rename": rename,
+    "inlay_hints": inlay_hints,
+    "code_actions": code_actions,
     "signature_help": signature_help,
     "incremental_edits": incremental_edits,
     "cross_file_edits": cross_file_edits,

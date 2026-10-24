@@ -1,0 +1,79 @@
+{
+ "recorded": "sourcekitd (Swift 6.4.1, x86_64 Linux) via SOURCEKIT_LSP_LITE_RECORD, project paths replaced by /project",
+ "text": "protocol Shape { func area() -> Double }\nstruct Sq: Shape {}\nlet a = Point(x: 0, y: 0)\nlet n: Int = a.norm()\n",
+ "request": {
+  "key.request": "source.request.diagnostics",
+  "key.sourcefile": "/project/main.swift",
+  "key.compilerargs": [
+   "/project/Geometry.swift",
+   "/project/main.swift",
+   "-module-name",
+   "main",
+   "-vfsoverlay",
+   "/tmp/sourcekit-lsp-lite-15082434225753/overlay.yaml"
+  ]
+ },
+ "response": {
+  "key.diagnostics": [
+   {
+    "key.line": 2,
+    "key.column": 8,
+    "key.filepath": "/project/main.swift",
+    "key.severity": "source.diagnostic.severity.error",
+    "key.id": "type_does_not_conform",
+    "key.description": "type 'Sq' does not conform to protocol 'Shape'",
+    "key.diagnostics": [
+     {
+      "key.line": 2,
+      "key.column": 8,
+      "key.filepath": "/project/main.swift",
+      "key.severity": "source.diagnostic.severity.note",
+      "key.id": "missing_witnesses_general",
+      "key.description": "add stubs for conformance",
+      "key.fixits": [
+       {
+        "key.offset": 59,
+        "key.length": 0,
+        "key.sourcetext": "\n    func area() -> Double {\n        <#code#>\n    }\n"
+       }
+      ]
+     },
+     {
+      "key.line": 1,
+      "key.column": 23,
+      "key.filepath": "/project/main.swift",
+      "key.severity": "source.diagnostic.severity.note",
+      "key.id": "no_witnesses",
+      "key.description": "protocol requires function 'area()' with type '() -> Double'"
+     }
+    ]
+   },
+   {
+    "key.line": 4,
+    "key.column": 16,
+    "key.filepath": "/project/main.swift",
+    "key.severity": "source.diagnostic.severity.error",
+    "key.id": "cannot_convert_initializer_value",
+    "key.description": "cannot convert value of type 'Double' to specified type 'Int'",
+    "key.ranges": [
+     {
+      "key.offset": 100,
+      "key.length": 8
+     }
+    ],
+    "key.fixits": [
+     {
+      "key.offset": 100,
+      "key.length": 0,
+      "key.sourcetext": "Int("
+     },
+     {
+      "key.offset": 108,
+      "key.length": 0,
+      "key.sourcetext": ")"
+     }
+    ]
+   }
+  ]
+ }
+}

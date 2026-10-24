@@ -70,7 +70,12 @@ public:
 
 /// LSP Diagnostic[] for \p Path from a source.request.diagnostics response.
 /// Diagnostics sourcekitd attributes to other files are left out; notes
-/// become relatedInformation.
+/// become relatedInformation. The compiler's fix-its become quick fixes in
+/// each diagnostic's `codeActions` (clangd's extension, which SourceKit-LSP
+/// uses too): the diagnostic's own fix-its as one preferred action, and each
+/// note's as an action titled by the note. codeActions() hands them back
+/// from the diagnostics a client sends with textDocument/codeAction, so the
+/// edits are always those computed with the text the client saw.
 [[nodiscard]] json::Value diagnostics(const json::Value &Response, const std::string &Path,
                                       const DocumentView &Doc, FileSource &Files);
 
@@ -151,6 +156,15 @@ struct Occurrence {
 [[nodiscard]] json::Value renameEdit(std::span<const Occurrence> Occurrences,
                                      std::string_view OldName, std::string_view NewName,
                                      FileSource &Files, Encoding Enc);
+
+/// LSP InlayHint[] from a source.request.variable.type response: ": Type"
+/// after each variable whose type is inferred, none for annotated ones.
+[[nodiscard]] json::Value inlayHints(const json::Value &Response, const DocumentView &Doc);
+
+/// LSP CodeAction[] for a textDocument/codeAction request: the quick fixes
+/// carried by the diagnostics in its context (see diagnostics()), each once.
+/// Nothing when the client asks only for kinds other than quickfix.
+[[nodiscard]] json::Value codeActions(const json::Value &Params);
 
 /// LSP CompletionItemKind for a sourcekitd kind uid.
 [[nodiscard]] int completionKind(std::string_view Kind) noexcept;

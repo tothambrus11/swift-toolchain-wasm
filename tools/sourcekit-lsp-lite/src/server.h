@@ -114,6 +114,7 @@ private:
   [[nodiscard]] json::Value documentHighlight(const json::Value &Params);
   [[nodiscard]] json::Value documentSymbol(const json::Value &Params);
   [[nodiscard]] json::Value signatureHelp(const json::Value &Params);
+  [[nodiscard]] json::Value inlayHint(const json::Value &Params);
   // Rename can be refused with a reason for the user: an empty result with
   // \p Refusal set becomes a RequestFailed error.
   [[nodiscard]] json::Value prepareRename(const json::Value &Params, std::string &Refusal);
