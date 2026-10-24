@@ -40,7 +40,7 @@ for `wasm32-wasip1` out of tree as [YoWASP][yowasp] (currently LLVM 22.1.0), whi
 Compiler Explorer and others use. So the LLVM-on-wasm part of this project has real
 prior art; only the Swift-on-WASI part did not.
 
-## Swift patches (14 files)
+## Swift patches (`0001`: 14 files; `0002`, `0003`: macros)
 
 ### Fixed upstream on `main`, absent from `release/6.3`
 
@@ -103,6 +103,54 @@ started on a single-threaded backend of its own (PassiveLogic's "prepare coopera
 backend", #953, and "share the main-queue drain with non-Cocoa single-threaded backends"),
 which drains the main queue under `defined(__wasi__)`. Once that lands, SourceKit could
 keep `Concurrency-libdispatch.cpp` on WASI and this file would go.
+
+### Macros on a WASI host (added 2026-10-24, not reported)
+
+Two patches of their own, so each can go upstream separately. Both are inert in the
+default build; `SWIFT_MACROS=1` (the workflow's `macros` input) is what uses them.
+
+**`0002-wasi-libc-modulemap-cxx-interop.patch`** — `stdlib/public/Platform/wasi-libc.modulemap`.
+The port of [swift#90332]'s Emscripten fix: `module SwiftWASILibc [system]
+[no_undeclared_includes]`, and `complex.h` moved out of the umbrella into `explicit
+module Complex`. Both halves are needed, checked one at a time: without the attribute,
+importing any C++ module fails with the cycle `SwiftWASILibc -> std_inttypes_h ->
+SwiftWASILibc`; without the submodule, C's `complex` macro breaks libc++'s `<complex>`
+inside the `std` module. With both, a Swift file using `std::vector` and `std::string`
+from a C++ header compiles, links and runs on wasm32-wasip1, and plain C and Foundation
+imports are unaffected. The SDK is prebuilt, so `scripts/wasm-sdk.sh` also copies the
+patched file into the SDK it unpacks. Upstream: unfixed on `main` and `release/6.3`; the
+most obviously correct PR in this repository, since it repeats an accepted fix.
+
+**`0003-wasi-host-macros.patch`** — ASTGen and the in-process plugin server on a WASI host.
+
+| File | Why |
+| --- | --- |
+| `CMakeLists.txt` | Lets `SWIFT_BUILD_SWIFT_SYNTAX` stay on for a WASI host with `SWIFT_ENABLE_SWIFT_IN_SWIFT` off: ASTGen and the compiler's swift-syntax are plain Swift libraries CMake compiles for the WASI triple with the native `swiftc`; nothing is bootstrapped. Upstream ties the parser to Swift-in-Swift. |
+| `cmake/modules/AddSwift.cmake` | Links the Swift runtime from the Swift SDK statically (`swiftrt.o`, `swiftCore`, `swift_Concurrency`, `swiftWASILibc`, `swiftCxx`): the libraries `swift-autolink-extract` lists for ASTGen, MacroEvaluation and swift-syntax, since the C++ link does not read autolink entries. Upstream has no WASI arm here. |
+| `lib/CompilerSwiftSyntax/CMakeLists.txt` | swift-syntax as static libraries: a WASI host has no shared libraries. |
+| `lib/SwiftSyntax/CMakeLists.txt`, `lib/Macros/CMakeLists.txt`, `tools/swift-plugin-server/CMakeLists.txt`, `tools/driver/CMakeLists.txt` | Skip what is a shared library or a separate process on other hosts: the installed swift-syntax, the native macro plugins, `swift-plugin-server` and `libSwiftInProcPluginServer`. |
+| `tools/driver/CMakeLists.txt` | Also: no `swiftCore` by name, since the runtime is linked by path above. |
+| `lib/AST/PluginRegistry.cpp` | `InProcessPlugins::create` cannot `dlopen` the in-process server, so under `__wasi__` (with swift-syntax) the server is two wasm imports from `swift_plugin_host`, `handle_message` and `take_response`, which the embedder provides. Everything above the message channel — `getCapability`, `loadPluginLibrary`, the expansion messages — is unchanged, so the embedder speaks the same JSON protocol (version 7) as `libSwiftInProcPluginServer`. |
+| `lib/AST/PluginLoader.cpp` | The server needs no path on WASI; `lib<Module>.wasm` names a plugin library as `lib<Module>.so` does. |
+
+Upstream: nothing comparable. [swift#73031] (draft) runs wasm plugins inside the native
+`swift-plugin-server` through WasmKit; this is the other half, a compiler that is itself
+wasm and hands plugins to its embedder's `WebAssembly` engine, which is where the plugins
+run fastest (2 to 17 ms a warm expansion in Node, measured below, against about 25 ms in
+WasmKit). The
+upstreamable shape is the import pair as a third `InProcessPlugins` backend next to
+`dlopen`, offered once a WASI host is in-tree. The 32-bit question the research flagged
+did not come up at compile time: ASTGen, MacroEvaluation and swift-syntax compiled for wasm32 unchanged,
+since `SWIFT_ENABLE_SWIFT_IN_SWIFT` stays off and with it `BridgedSwiftObject`, the one
+32-bit fix [swift#90326] made on the Swift side.
+
+What is not a patch but matters as much: the compiler's Swift code imports its C++
+headers, and has to parse them with the clang inside the native `swiftc` (21.0). wasi-sdk
+34's libc++ (23) needs clang 21.1 and does not build as a Clang module there; the Swift
+SDK's libc++ (21) is built without threads, which LLVM's headers need. Stage 30 compiles
+the Swift code against the Swift SDK's headers with `_LIBCPP_HAS_THREADS` set, and links
+it with wasi-sdk's libc++ like the rest of the compiler (`scripts/wasm-sdk.sh` says why
+that is sound). A Swift SDK built with threads would remove the overlay.
 
 ## Two latent bugs found while auditing, neither reported upstream
 
@@ -176,8 +224,9 @@ worked example of the other branch of that argument, and is worth posting as one
 
 ## The "no macros" limit has an upstream track too
 
-`docs/status.md` lists macros and compiler plugins as impossible here, because plugins are
-spawned executables and WASI cannot spawn anything. Two upstream changes bear on that:
+`docs/status.md` used to list macros and compiler plugins as impossible here, because
+plugins are spawned executables and WASI cannot spawn anything. Patches 0002 and 0003
+(above) now make them work, along the lines below. The two upstream changes they build on:
 
 * [swift#73725] "[Macros] In-process plugin server" (rintaro, merged 2024-06-26) removed
   the *spawn* requirement for the common case — the plugin server is loaded into the
@@ -223,7 +272,7 @@ macros ever become a requirement for the IDE.
 4. **Upstreaming order**, smallest and most defensible first:
    1. `Identifier.h` alignment — a real bug, trivially correct, host-independent.
    2. `Default/TaskQueue.inc` build fix — bit rot, host-independent.
-   3. `wasi-libc.modulemap` — a direct port of an accepted Emscripten fix.
+   3. `wasi-libc.modulemap` (patch 0002) — a direct port of an accepted Emscripten fix.
    4. `SILFunctionType` alignment — needs an upstream decision, not a patch from us.
    5. Swift's WASI `#if`s (Program, TaskQueue, Statistic, PluginRegistry,
       ToolChains, IRGen) — best offered as "WASI host, alongside the Emscripten

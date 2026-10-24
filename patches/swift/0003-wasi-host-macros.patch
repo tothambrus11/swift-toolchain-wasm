@@ -228,10 +228,23 @@ index 4beb204..194b130 100644
    message(SEND_ERROR "swift-syntax is required to build the Swift compiler. Please run update-checkout or specify SWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE")
    return()
 diff --git a/tools/driver/CMakeLists.txt b/tools/driver/CMakeLists.txt
-index 1726f14..4a58763 100644
+index 1726f14..f0c9996 100644
 --- a/tools/driver/CMakeLists.txt
 +++ b/tools/driver/CMakeLists.txt
-@@ -12,7 +12,9 @@ function(add_swift_parser_link_libraries target)
+@@ -5,14 +5,20 @@
+ # parser is built in.
+ function(add_swift_parser_link_libraries target)
+   if(SWIFT_BUILD_SWIFT_SYNTAX)
+-    target_link_libraries(${target}
+-                          PRIVATE swiftCore)
++    # A WASI host links the Swift runtime from the Swift SDK by path
++    # (_add_swift_runtime_link_flags); there is no swiftCore to find by name.
++    if(NOT SWIFT_HOST_VARIANT_SDK STREQUAL "WASI")
++      target_link_libraries(${target}
++                            PRIVATE swiftCore)
++    endif()
+ 
+     get_property(SWIFT_MACRO_PLUGINS GLOBAL PROPERTY SWIFT_MACRO_PLUGINS)
      foreach(macrolib ${SWIFT_MACRO_PLUGINS})
        add_dependencies(${target} ${macrolib})
      endforeach()
