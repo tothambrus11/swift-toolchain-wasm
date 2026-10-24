@@ -45,10 +45,16 @@ workflow saves its build trees and resumes on the next run.
 | `30-swift-frontend-wasm` | `swift-frontend.wasm` |
 | `35-sourcekitd-wasm` | `sourcekitd-request.wasm`, from Stage 30's tree with SourceKit switched on |
 | `36-sourcekit-lsp-lite-wasm` | `sourcekit-lsp-lite.wasm`, its reactor, and `swift-frontend-lsp.wasm` (the reactor plus the compiler), linked like Stage 35's driver (optional) |
+| `37-macro-plugins` | `SwiftMacroPlugins.wasm`, the macro plugins as one WASI module, plus the JavaScript plugin host |
 | `40-sysroot-pack` | the browser sysroot tarball |
 | `50-smoke-test` | compiles, links and runs a Swift program using only the wasm tools |
 | `52-sourcekitd-smoke-test` | asks `sourcekitd-request.wasm` for a completion and a cursor info, under wasmtime |
 | `53-sourcekit-lsp-lite-smoke-test` | LSP scenarios against `sourcekit-lsp-lite.wasm` under wasmtime, both reactors from Node, and a compile with `swift-frontend-lsp.wasm` |
+| `57-macros-smoke-test` | compiles a file using `#stringify`, `@Observable`, `@Test` and `#expect` with the macro plugins, links it and runs its tests |
+
+Macro support is on by default (`SWIFT_MACROS=1`); `SWIFT_MACROS=0` builds the smaller
+compiler without it. [docs/status.md](docs/status.md#macros) says what it costs and what an
+embedder has to provide.
 
 [`tools/sourcekit-lsp-lite`](tools/sourcekit-lsp-lite) is the LSP server's C++ source, with
 its own native build, presets, tests and [workflow](.github/workflows/lsp-lite.yml): it builds

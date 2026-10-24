@@ -17,11 +17,13 @@ Also verified compiling: structs and protocol conformances (`CustomStringConvert
 dictionaries and sorting, string interpolation, closures, generics through `map`.
 
 A single-file compile takes roughly one second in Node, about three in a browser tab.
-`swift-frontend.wasm` is 146 MiB and `wasm-ld.wasm` is 57 MiB.
+`swift-frontend.wasm` is 175 MiB (146 MiB without macros) and `wasm-ld.wasm` is 57 MiB.
 
-## Macros (`SWIFT_MACROS=1`, workflow input `macros: true`)
+## Macros
 
-A second build of the compiler expands macros on the wasm host itself. ASTGen, the
+The compiler expands macros on the wasm host itself. This is the default build
+(`SWIFT_MACROS=1`, the workflow's `macros` input); `SWIFT_MACROS=0` builds the smaller
+compiler without macros, which needs no plugin host from its embedder. ASTGen, the
 compiler's swift-syntax and SwiftCompilerSources are compiled for `wasm32-wasip1` and
 linked into `swift-frontend.wasm`; macro plugins are wasm modules of their own, which the
 compiler reaches through its in-process plugin hook.
@@ -295,10 +297,12 @@ runs all of it, plus a wasm compile with the same warnings.
 
 ## Known limits
 
-* **Macros need the macros build** (above). The default build has no swift-syntax, so a
-  file that uses a macro fails to compile with it.
-* **No Swift-implemented SIL optimizer passes in the default build.**
-  `SWIFT_ENABLE_SWIFT_IN_SWIFT` is off there; the macros build turns it on. The compiler's
+* **Every compiler module needs the plugin host's two imports** (above), even for code
+  without macros: an embedder passes `SwiftPluginHost`'s imports, or preloads
+  `no-plugins.wat`. A `SWIFT_MACROS=0` build has no such imports and no macros.
+* **No Swift-implemented SIL optimizer passes without macros.**
+  `SWIFT_ENABLE_SWIFT_IN_SWIFT` is off in a `SWIFT_MACROS=0` build; the default build
+  turns it on. The compiler's
   Swift code needs C++ interop, which the stock Swift 6.3.3 SDK breaks for
   `wasm32-unknown-wasip1` with a Clang module cycle, `SwiftWASILibc -> std_inttypes_h ->
   SwiftWASILibc`; the macros build installs a fixed `wasi-libc.modulemap` (patch `0002`, a

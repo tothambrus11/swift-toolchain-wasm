@@ -51,7 +51,7 @@ prune() {
 # Testing and the libraries it links (_TestDiscovery, _TestingInternals,
 # _TestingInterop); otherwise they go too.
 prune -name 'XCTest.*' -o -name 'libXCTest*'
-if [[ "${SWIFT_MACROS:-0}" != "1" ]]; then
+if [[ "${SWIFT_MACROS:-1}" != "1" ]]; then
   prune -name 'Testing.*' -o -name 'libTesting*' -o -name '*.swiftcrossimport'
 fi
 

@@ -28,14 +28,14 @@
 #
 # Macros need the compiler's Swift parser (ASTGen and the compiler's swift-syntax), and a
 # native compiler runs macro plugins as processes or shared libraries, neither of which
-# WASI has. With SWIFT_MACROS=1 this stage builds that parser in anyway, and patch 0003
+# WASI has. With SWIFT_MACROS=1 (the default) this stage builds that parser in anyway, and patch 0003
 # sends the in-process plugin channel to the embedder (tools/plugin-host), which runs
 # plugins that are themselves wasm (Stage 37). The Swift code is compiled by the native
 # swiftc for wasm32-wasip1 through CMake's Swift support, linked against the Swift SDK's
 # runtime. SwiftCompilerSources is built the same way (SWIFT_ENABLE_SWIFT_IN_SWIFT=ON,
 # HOSTTOOLS): swift-testing's macros need its InitializeStaticGlobals pass, and it
 # brings back the Swift-written optimizer passes. Patch 0002 is what fixed the interop
-# cycle described above. Without SWIFT_MACROS=1 the build is exactly as before: both off.
+# cycle described above. SWIFT_MACROS=0 builds without either, as before macros.
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
 : "${SWIFT_SRC:=${TC_SRC}/swift}"
@@ -75,7 +75,7 @@ STACK_SIZE=16777216
   die "run 15-cmark-wasm.sh first"
 
 MACRO_ARGS=(-DSWIFT_BUILD_SWIFT_SYNTAX=OFF -DSWIFT_ENABLE_SWIFT_IN_SWIFT=OFF -DBOOTSTRAPPING_MODE=OFF)
-if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
+if [[ "${SWIFT_MACROS:-1}" == "1" ]]; then
   : "${SWIFT_SYNTAX_SRC:=${TC_SRC}/swift-syntax}"
   : "${SWIFT_STRING_PROCESSING_SRC:=${TC_SRC}/swift-experimental-string-processing}"
   [[ -d "$SWIFT_SYNTAX_SRC" && -d "$SWIFT_STRING_PROCESSING_SRC" ]] ||

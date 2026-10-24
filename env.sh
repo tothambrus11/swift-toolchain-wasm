@@ -30,6 +30,11 @@ TOOLCHAIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # build tractable and avoids SharedArrayBuffer/COOP-COEP requirements on the page.
 : "${WASM_TARGET:=wasm32-wasip1}"
 : "${JOBS:=$(nproc)}"
+# Macro support: ASTGen, swift-syntax and SwiftCompilerSources in the frontend,
+# macro plugins as wasm (Stage 37). SWIFT_MACROS=0 builds the smaller compiler
+# without them, which needs no plugin host from its embedder (docs/status.md).
+: "${SWIFT_MACROS:=1}"
+export SWIFT_MACROS
 
 mkdir -p "$TC_SRC" "$TC_BUILD" "$TC_OUT"
 

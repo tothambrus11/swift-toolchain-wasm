@@ -40,7 +40,7 @@ run_tool() {
   # A frontend built with macro support imports the plugin host's two functions
   # (patch 0003), which a plain WASI runtime does not provide: run it under the
   # reference embedder instead, with the same directories.
-  if [[ "$tool" == swift-frontend.wasm && "${SWIFT_MACROS:-0}" == "1" ]]; then
+  if [[ "$tool" == swift-frontend.wasm && "${SWIFT_MACROS:-1}" == "1" ]]; then
     node --no-turbo-fast-api-calls "${TOOLCHAIN_ROOT}/tools/plugin-host/run-frontend.mjs" \
       --dir "${WORK}::/work" --dir "${SYSROOT}::/sysroot" "${TC_OUT}/${tool}" "$@"
     return

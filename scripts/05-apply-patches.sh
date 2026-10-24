@@ -94,10 +94,10 @@ apply_series() {
 }
 
 apply_series llvm "$LLVM_SRC"
-# Macro support builds SwiftCompilerSources, which needs patches/swift-macros on
-# top. They stay out of the default build until macros are the default, because
-# they change headers the whole compiler includes, and so would rebuild it.
-if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
+# Macro support (the default) builds SwiftCompilerSources, which needs
+# patches/swift-macros on top. A SWIFT_MACROS=0 build leaves them out: they change
+# headers the whole compiler includes, and that build does not need them.
+if [[ "${SWIFT_MACROS:-1}" == "1" ]]; then
   apply_series swift "${TC_SRC}/swift" "${TOOLCHAIN_ROOT}/patches/swift-macros"
 else
   apply_series swift "${TC_SRC}/swift"

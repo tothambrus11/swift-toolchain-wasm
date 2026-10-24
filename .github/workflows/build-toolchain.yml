@@ -23,11 +23,12 @@ on:
         default: false
       macros:
         description: >-
-          Build with macro support: ASTGen and swift-syntax in the frontend, macro
-          plugins as wasm (Stage 37), and the macro smoke test (Stage 57). Its build
-          trees are cached under their own keys, so the default build's are untouched.
+          Build with macro support (the default): ASTGen, swift-syntax and
+          SwiftCompilerSources in the frontend, macro plugins as wasm (Stage 37), and
+          the macro smoke test (Stage 57). Off builds the smaller compiler without
+          them, under its own cache keys.
         type: boolean
-        default: false
+        default: true
       release_tag:
         description: >-
           Tag to publish under (default swift-<version>-wasm). A new tag, such as
@@ -39,7 +40,7 @@ on:
 
 concurrency:
   # Never two builds writing the same cache.
-  group: toolchain-${{ github.ref }}${{ inputs.macros && '-macros' || '' }}
+  group: toolchain-${{ github.ref }}${{ (github.event_name != 'workflow_dispatch' || inputs.macros) && '-macros' || '' }}
   cancel-in-progress: false
 
 env:
@@ -47,11 +48,11 @@ env:
   WASI_SDK_VERSION: "34.0"
   # Leave headroom under the 6h limit to save caches and upload artifacts.
   STAGE_TIMEOUT_MINUTES: "300"
-  SWIFT_MACROS: ${{ inputs.macros && '1' || '0' }}
+  SWIFT_MACROS: ${{ (github.event_name != 'workflow_dispatch' || inputs.macros) && '1' || '0' }}
   # The build-tree cache key's prefix. A macros build must never restore into or
   # save over the default build's keys, and the default's restore-keys prefix
   # (build-<version>-) must not match a macros key, hence a different start.
-  BUILD_CACHE: ${{ inputs.macros && 'macros-build' || 'build' }}
+  BUILD_CACHE: ${{ (github.event_name != 'workflow_dispatch' || inputs.macros) && 'macros-build' || 'build' }}
 
 jobs:
   build:
@@ -227,7 +228,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: steps.pipeline.outputs.complete == 'true'
         with:
-          name: swift-toolchain-wasm-${{ env.SWIFT_VERSION }}${{ env.SWIFT_MACROS == '1' && '-macros' || '' }}
+          name: swift-toolchain-wasm-${{ env.SWIFT_VERSION }}${{ env.SWIFT_MACROS != '1' && '-nomacros' || '' }}
           path: out/
           retention-days: 30
 
@@ -243,9 +244,9 @@ jobs:
           echo "::error::the macro smoke test failed; see the 'Smoke-test macros' step."
           exit 1
 
-      # Never from a macros build until macro support is the default.
+      # Only the default (macros) build publishes: a release is one toolchain.
       - name: Publish release
-        if: steps.pipeline.outputs.complete == 'true' && env.SWIFT_MACROS != '1' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release)
+        if: steps.pipeline.outputs.complete == 'true' && env.SWIFT_MACROS == '1' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release)
         uses: softprops/action-gh-release@v2
         with:
           # A workflow_dispatch run has no tag of its own, and the action refuses to
@@ -271,6 +272,11 @@ jobs:
             | `sourcekit-lsp-lite.wasm` | an LSP server over the same sourcekitd, a WASI command speaking LSP on stdio (when Stage 36 built it) |
             | `sourcekit-lsp-lite-reactor.wasm` | the same server as a WASI reactor for a browser worker: `lsp_handle` per message, `lsp_idle` for diagnostics |
             | `swift-frontend-lsp.wasm` | that reactor and the compiler in one module: the `lsp_*` exports plus `swift_frontend_main(argc, argv)`, which runs `swift-frontend` (one compile per instance), so a browser downloads the compiler's code once |
+            | `SwiftMacroPlugins.wasm` | the macro plugins (`StringifyMacros`, `ObservationMacros`, swift-testing's `TestingMacros`) as one WASI module |
+            | `swift-plugin-host.mjs` | the embedder side of the compiler's plugin imports: runs those plugins, synchronously, in a browser worker or Node |
+            | `no-plugins.wat` | an embedder with no plugins, for wasmtime (`--preload swift_plugin_host=no-plugins.wat`) |
+
+            Every compiler module imports `swift_plugin_host.handle_message` and `swift_plugin_host.take_response`; pass `new SwiftPluginHost(...).imports` next to the WASI imports. See docs/status.md.
 
             Serve these next to a page and point a `WasmBackend` at the directory.
 

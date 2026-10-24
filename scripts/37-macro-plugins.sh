@@ -22,8 +22,8 @@
 # native toolchain and the Swift SDK for WebAssembly (the same SDK Stage 40 packs).
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-if [[ "${SWIFT_MACROS:-0}" != "1" ]]; then
-  log "macro support is off (SWIFT_MACROS=${SWIFT_MACROS:-0}); no plugins to build"
+if [[ "${SWIFT_MACROS:-1}" != "1" ]]; then
+  log "macro support is off (SWIFT_MACROS=${SWIFT_MACROS:-1}); no plugins to build"
   exit 0
 fi
 
@@ -111,3 +111,7 @@ built="$(find "${STAGE}/.build" -path '*release/SwiftMacroPlugins.wasm' -type f 
 # Names and debug info are most of an unstripped plugin; the host needs neither.
 "${WASI_SDK_PATH}/bin/llvm-strip" -o "${TC_OUT}/SwiftMacroPlugins.wasm" "$built"
 log "wrote ${TC_OUT}/SwiftMacroPlugins.wasm ($(du -h "${TC_OUT}/SwiftMacroPlugins.wasm" | cut -f1))"
+# The embedder's side ships with the plugins: a host that runs them, and one
+# with none for a runtime without JavaScript.
+install -m 0644 "${TOOLCHAIN_ROOT}/tools/plugin-host/swift-plugin-host.mjs" \
+  "${TOOLCHAIN_ROOT}/tools/plugin-host/no-plugins.wat" "${TC_OUT}/"

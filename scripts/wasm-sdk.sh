@@ -37,7 +37,7 @@ fetch_wasm_sdk() {
     die "wasm SDK bundle did not contain a WASI.sdk directory"
   fi
   # Until macro support is the default, the default build ships the SDK as it is.
-  if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
+  if [[ "${SWIFT_MACROS:-1}" == "1" ]]; then
     install_wasi_libc_modulemap
   fi
 }
