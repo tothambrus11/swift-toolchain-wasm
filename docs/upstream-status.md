@@ -175,7 +175,7 @@ lays out `std::vector` differently from 21, so a bridging function inlined into 
 A Swift SDK built with threads and the same libc++ as wasi-sdk would remove both the
 overlay and the need for pure bridging.
 
-## Two latent bugs found while auditing, neither reported upstream
+## Latent bugs found while auditing or debugging, none reported upstream
 
 **1. `CompoundDeclName` and `SelectiveDeclNameRef` are under-aligned on any
 32-bit host.** `include/swift/AST/Identifier.h` declares both with
@@ -203,6 +203,21 @@ bit that does not exist — on 64-bit hosts as much as on wasm32; it just has no
 bitten anyone yet. `scripts/55-check-alignment-contracts.sh` warns about this
 rather than failing, precisely because it is an upstream bug and not ours. No
 issue or PR reported.
+
+**3. Debug-variable instructions are allocated without their trailing padding
+(`patches/swift/0004`, found 2026-10-24).** `allocateDebugVarCarryingInst` in
+`lib/SIL/IR/SILInstructions.cpp` sizes an `AllocStackInst` or `DebugValueInst` as
+the plain sum of its trailing objects, while `llvm::TrailingObjects` places each at
+its own alignment. On a 64-bit host every trailing type is a multiple of eight bytes,
+so the sum is exact. On wasm32 `SILDIExprElement` is 8-byte aligned (it holds a
+`uint64_t`) after 4-byte `SILType`, `SILLocation` and scope pointers, so an
+instruction with a debug expression came out up to four bytes short and its last
+element overwrote the next heap block's header. dlmalloc then trapped in `free`
+(usually from `SILModule::flushDeletedInsts`) at `-O` and `-Osize`, where
+`salvageDebugInfo` and SROA make such `debug_value`s, depending only on the heap's
+layout: the same four-line program crashed or compiled depending on its identifiers'
+names. The patch computes the size the way `TrailingObjects` lays it out. `main` has
+the same sum, moved into `getDebugVarTrailingDataSize`.
 
 ## LLVM/clang patches (19 files)
 

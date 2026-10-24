@@ -117,6 +117,12 @@ That script also reports that **`swift::SILFunctionType` violates its contract o
 host, 64-bit included** — a pre-existing upstream inconsistency that nothing appears to
 exercise. It is warned about, not treated as a wasm regression.
 
+A third 32-bit bug was a heap overflow, not an alignment contract: `AllocStackInst` and
+`DebugValueInst` were allocated without the padding `llvm::TrailingObjects` puts before
+their 8-byte-aligned debug-expression elements, so `-O` and `-Osize` compiles trapped in
+`free` (out of bounds) whenever the heap's layout put a block header in the missing four
+bytes. Patch `0004`; [upstream-status.md](upstream-status.md) has the details.
+
 ## sourcekitd
 
 **Status: builds in CI on a branch; not yet seen answering.** Stage 35 cross-builds the

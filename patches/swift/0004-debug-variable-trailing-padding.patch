@@ -1,0 +1,74 @@
+Allocate debug-variable instructions with their trailing objects' padding.
+
+AllocStackInst and DebugValueInst keep their debug variable in
+llvm::TrailingObjects (SILType, SILLocation, const SILDebugScope *,
+SILDIExprElement, Operand, char), which places each type at its own
+alignment. allocateDebugVarCarryingInst summed the sizes without that
+padding. On a 64-bit host every trailing type is a multiple of 8 bytes and
+nothing is lost; on wasm32 SILDIExprElement is 8-byte aligned (its uint64_t)
+after 4-byte objects, so an instruction with a debug expression was up to 4
+bytes too small and its last element overwrote the next heap block's header.
+
+Symptom: at -O and -Osize (where salvageDebugInfo and SROA create
+debug_values with fragment expressions), dlmalloc traps in free with "memory
+access out of bounds", usually from SILModule::flushDeletedInsts, depending
+only on the heap's layout: a four-line program crashed or not depending on
+its identifiers' names. Found by padding every allocateInst by 16 bytes
+(the traps went away), then watching the corrupted header: the write came
+from DebugValueInst::create under salvageDebugInfo in SILCombine.
+
+Upstream: the same sum is on main (getDebugVarTrailingDataSize); not reported.
+
+diff --git a/lib/SIL/IR/SILInstructions.cpp b/lib/SIL/IR/SILInstructions.cpp
+index ea93eb5..da39308 100644
+--- a/lib/SIL/IR/SILInstructions.cpp
++++ b/lib/SIL/IR/SILInstructions.cpp
+@@ -155,18 +155,40 @@ collectTypeDependentOperands(SmallVectorImpl<SILValue> &typeDependentOperands,
+ // SILInstruction Subclasses
+ //===----------------------------------------------------------------------===//
+ 
++/// The size of an instruction carrying a debug variable: the instruction, then
++/// its trailing objects in the order AllocStackInst and DebugValueInst declare
++/// them (SILType, SILLocation, const SILDebugScope *, SILDIExprElement,
++/// Operand, char), each placed at its own alignment as llvm::TrailingObjects
++/// places it. Summing the sizes alone is short by that padding wherever a type
++/// is more aligned than the one before it: on a 32-bit host SILDIExprElement
++/// (8-byte aligned by its uint64_t) follows 4-byte objects, so an instruction
++/// with a debug expression was allocated up to 4 bytes too small and wrote its
++/// last element over the next heap block's header. (DebugValueInst has no
++/// Operand objects; aligning for them only rounds up.)
++template <typename INST>
++static size_t debugVarCarryingInstSize(std::optional<SILDebugVariable> Var,
++                                       size_t numOperands) {
++  size_t size = sizeof(INST);
++  auto append = [&size](size_t align, size_t bytes) {
++    size = llvm::alignTo(size, align) + bytes;
++  };
++  append(alignof(SILType), Var && Var->Type ? sizeof(SILType) : 0);
++  append(alignof(SILLocation), Var && Var->Loc ? sizeof(SILLocation) : 0);
++  append(alignof(const SILDebugScope *),
++         Var && Var->Scope ? sizeof(const SILDebugScope *) : 0);
++  append(alignof(SILDIExprElement),
++         sizeof(SILDIExprElement) * (Var ? Var->DIExpr.getNumElements() : 0));
++  append(alignof(Operand), sizeof(Operand) * numOperands);
++  append(alignof(char), Var ? Var->Name.size() : 0);
++  return size;
++}
++
+ template <typename INST>
+ static void *allocateDebugVarCarryingInst(SILModule &M,
+                                           std::optional<SILDebugVariable> Var,
+                                           ArrayRef<SILValue> Operands = {}) {
+-  return M.allocateInst(
+-      sizeof(INST) + (Var ? Var->Name.size() : 0) +
+-          (Var && Var->Type ? sizeof(SILType) : 0) +
+-          (Var && Var->Loc ? sizeof(SILLocation) : 0) +
+-          (Var && Var->Scope ? sizeof(const SILDebugScope *) : 0) +
+-          sizeof(SILDIExprElement) * (Var ? Var->DIExpr.getNumElements() : 0) +
+-          sizeof(Operand) * Operands.size(),
+-      alignof(INST));
++  return M.allocateInst(debugVarCarryingInstSize<INST>(Var, Operands.size()),
++                        alignof(INST));
+ }
+ 
+ TailAllocatedDebugVariable::TailAllocatedDebugVariable(
