@@ -109,11 +109,20 @@ jobs:
         if: env.SWIFT_MACROS == '1'
         run: node --test tools/plugin-host/test/*.test.mjs
 
+      # Keyed by build variant and patch series, so the next run restores exactly the
+      # tree, mtimes included, that the cached build trees were compiled from. Under one
+      # fixed key the cache kept its first snapshot forever (a saved key is never
+      # overwritten): every macros run then re-cloned swift-syntax and re-applied the
+      # macros patches onto it with new mtimes, and rebuilt the compiler from scratch
+      # (runs 25-28, two hours each).
       - name: Restore sources
         uses: actions/cache/restore@v4
         with:
           path: src
-          key: src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}
+          key: src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}-${{ env.BUILD_CACHE }}-${{ hashFiles('patches/**') }}
+          restore-keys: |
+            src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}-${{ env.BUILD_CACHE }}-
+            src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}
 
       # The build trees are the expensive thing. `restore-keys` is what makes the build
       # resumable: a run that timed out leaves a partial tree under a stale key, and the
@@ -155,7 +164,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: src
-          key: src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}
+          key: src-${{ env.SWIFT_VERSION }}-wasi${{ env.WASI_SDK_VERSION }}-${{ env.BUILD_CACHE }}-${{ hashFiles('patches/**') }}
         continue-on-error: true
 
       - name: Save build trees
