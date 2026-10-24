@@ -1,8 +1,9 @@
 name: Build wasm toolchain
 
 # Produces the WebAssembly-hosted Swift toolchain — swift-frontend.wasm, wasm-ld.wasm,
-# the packed sysroot and sourcekitd-request.wasm — and publishes them so a web IDE can
-# fetch and run them.
+# the packed sysroot, sourcekitd-request.wasm, sourcekit-lsp-lite and
+# swift-frontend-lsp.wasm (compiler and language server in one module) — and publishes
+# them so a web IDE can fetch and run them.
 #
 # The build does not fit in one GitHub Actions job: cross-compiling LLVM, clang and the
 # Swift frontend takes several hours, against a six-hour job limit. The workflow is
@@ -20,6 +21,12 @@ on:
         description: Publish artifacts as a GitHub release
         type: boolean
         default: false
+      release_tag:
+        description: >-
+          Tag to publish under (default swift-<version>-wasm). A new tag, such as
+          swift-6.3.3-wasm-2, leaves the assets of an existing release in place for
+          consumers that pin them by SHA-256.
+        default: ""
   push:
     tags: ["v*"]
 
@@ -160,7 +167,7 @@ jobs:
         continue-on-error: true
         run: |
           missing=0
-          for f in out/sourcekit-lsp-lite.wasm out/sourcekit-lsp-lite-reactor.wasm; do
+          for f in out/sourcekit-lsp-lite.wasm out/sourcekit-lsp-lite-reactor.wasm out/swift-frontend-lsp.wasm; do
             [ -f "$f" ] || { echo "::warning::$f was not built; see Stage 36 in the build log."; missing=1; }
           done
           [ "$missing" = 0 ] || exit 0
@@ -196,10 +203,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           # A workflow_dispatch run has no tag of its own, and the action refuses to
-          # publish without one ("GitHub Releases requires a tag"). Use one stable tag
-          # per Swift release: rebuilding replaces the artifacts in place, so consumers
-          # pointing at releases/latest/download keep working across rebuilds.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('swift-{0}-wasm', env.SWIFT_VERSION) }}
+          # publish without one ("GitHub Releases requires a tag"). By default, one
+          # stable tag per Swift release: rebuilding replaces the artifacts in place,
+          # so consumers pointing at releases/latest/download keep working across
+          # rebuilds. That breaks consumers that pin an asset by SHA-256, so the
+          # release_tag input publishes under a new tag instead.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag || format('swift-{0}-wasm', env.SWIFT_VERSION) }}
           name: Swift ${{ env.SWIFT_VERSION }} toolchain for WebAssembly hosts
           make_latest: true
           files: out/*
@@ -215,6 +224,7 @@ jobs:
             | `sourcekitd-request.wasm` | in-process sourcekitd with a minimal driver: YAML requests in, responses out |
             | `sourcekit-lsp-lite.wasm` | an LSP server over the same sourcekitd, a WASI command speaking LSP on stdio (when Stage 36 built it) |
             | `sourcekit-lsp-lite-reactor.wasm` | the same server as a WASI reactor for a browser worker: `lsp_handle` per message, `lsp_idle` for diagnostics |
+            | `swift-frontend-lsp.wasm` | that reactor and the compiler in one module: the `lsp_*` exports plus `swift_frontend_main(argc, argv)`, which runs `swift-frontend` (one compile per instance), so a browser downloads the compiler's code once |
 
             Serve these next to a page and point a `WasmBackend` at the directory.
 

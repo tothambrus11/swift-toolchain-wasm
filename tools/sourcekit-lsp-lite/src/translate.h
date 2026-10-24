@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -111,6 +112,45 @@ struct CompletionRequest {
 /// Whether a cursorinfo response names \p USR, as its symbol or as one of its
 /// secondary symbols (Point(x:y:) is the struct and its initializer).
 [[nodiscard]] bool refersTo(const json::Value &CursorInfo, std::string_view USR);
+
+/// What a rename at the cursor would change: the declaration's USR and its
+/// base name, or, when Refusal is not empty, why nothing can be renamed there
+/// (a sentence for the user; USR and Name are then empty).
+struct RenameTarget {
+  std::string USR;
+  std::string Name;
+  std::string Refusal;
+};
+
+/// The symbol a rename of \p Word, the identifier under the cursor, would
+/// change, from a cursorinfo response at it. The symbol is the primary one or
+/// a secondary one whose base name is \p Word (at `Point(x:y:)` that is the
+/// struct, not its initializer). Refused: no symbol, a symbol declared
+/// outside the project's files (the standard library), modules,
+/// initializers, subscripts and operators.
+[[nodiscard]] RenameTarget renameTarget(const json::Value &CursorInfo, std::string_view Word);
+
+/// Why \p NewName cannot replace a base name, or empty when it can. It must be
+/// one identifier, or a backticked one; a keyword must be backticked.
+/// Argument labels are refused: relatedidents reports base-name ranges only,
+/// because finding the labels of each call needs swift-syntax, which the wasm
+/// sourcekitd is built without (SWIFT_BUILD_SWIFT_SYNTAX=OFF).
+[[nodiscard]] std::string renameNameProblem(std::string_view NewName);
+
+/// One place a symbol's name is written.
+struct Occurrence {
+  std::string Path;
+  ByteRange Range;
+};
+
+/// An LSP WorkspaceEdit ({"changes": {uri: TextEdit[]}}) writing \p NewName
+/// over each occurrence. An occurrence whose text is not \p OldName (or
+/// `OldName` in backticks) is left alone rather than overwritten: a range
+/// sourcekitd reports for something else (an implicit member, a stale file)
+/// must not destroy text. Edits within a file are in document order.
+[[nodiscard]] json::Value renameEdit(std::span<const Occurrence> Occurrences,
+                                     std::string_view OldName, std::string_view NewName,
+                                     FileSource &Files, Encoding Enc);
 
 /// LSP CompletionItemKind for a sourcekitd kind uid.
 [[nodiscard]] int completionKind(std::string_view Kind) noexcept;

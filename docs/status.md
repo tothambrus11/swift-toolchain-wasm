@@ -121,8 +121,8 @@ What single-threaded costs, and what an embedder has to know:
 
 ## sourcekit-lsp-lite
 
-**Status: passes natively against Swift 6.4.1's `libsourcekitdInProc.so`; compiles for
-`wasm32-wasip1`; the wasm link is unverified.** [`tools/sourcekit-lsp-lite`](../tools/sourcekit-lsp-lite)
+**Status: passes natively against Swift 6.4.1's `libsourcekitdInProc.so`, and linked for
+`wasm32-wasip1` and smoke-tested under wasmtime and Node by build-toolchain.yml (Stage 53).** [`tools/sourcekit-lsp-lite`](../tools/sourcekit-lsp-lite)
 is a small LSP server in C++20 over sourcekitd's public C API (`sourcekitd.h`, synchronous
 `sourcekitd_send_request_sync` only: no blocks, no notification handler). It exists because
 SourceKit-LSP is a Swift program with threads, an index store and a build-system layer,
@@ -141,6 +141,7 @@ drives the reactor from Node. Both are optional: a failure warns and the toolcha
 | `definition` | `cursorinfo`'s `key.filepath` + `key.offset` (or its module name for SDK symbols, which yield nothing) |
 | `references` | `cursorinfo` for the USR, then in every project file `cursorinfo` on textual occurrences of the name until one has that USR, then `relatedidents` from there |
 | `documentHighlight` | `relatedidents` (base names only: without swift-syntax there is no name matcher for argument labels) |
+| `prepareRename` / `rename` | `cursorinfo` for the symbol (refused, with the reason as a `RequestFailed` message, for the standard library, modules, initializers, subscripts and operators), then the occurrences `references` finds, every candidate resolved; each base-name range is checked to still spell the old name before it is rewritten. A new name with argument labels (`moved(to:)`) is refused: renaming labels needs swift-syntax's name matcher, which this build does not have |
 | `documentSymbol` | a throwaway `editor.open` with substructure, mapped to a `DocumentSymbol` tree |
 | `signatureHelp` | `signaturehelp` |
 
@@ -166,9 +167,9 @@ its mirror (`use-external-names: false`). On WASI the shadow directory is create
   is found less reliably than a named declaration.
 * **No build system.** No SwiftPM, no `compile_commands.json`, no multiple modules: one
   module, the files the server scanned, the arguments the client sent.
-* **No rename, formatting, semantic tokens, code actions or fix-its, inlay hints,
-  folding ranges, generated interfaces, or macro expansion** (macros cannot run on WASI
-  anyway).
+* **Rename covers base names only** (above), and there is **no formatting, semantic
+  tokens, code actions or fix-its, inlay hints, folding ranges, generated interfaces, or
+  macro expansion** (macros cannot run on WASI anyway).
 * **No cancellation and no concurrency.** One request at a time; `$/cancelRequest` is
   ignored, and a slow answer holds the next message.
 * **No `completionItem/resolve`.** Items carry their documentation brief up front.
@@ -199,6 +200,25 @@ URIs name, and a writable `/tmp`. The compiler arguments (`-target wasm32-unknow
 is the reference host; `sourcekit-lsp-lite.wasm` (a command, LSP on stdio with
 `Content-Length` framing) is the same server for wasmtime and tests.
 
+### One module for the compiler and the server
+
+`swift-frontend-lsp.wasm` is the reactor above plus one more export,
+`swift_frontend_main(argc, argv)` ([`src/frontend.cpp`](../tools/sourcekit-lsp-lite/src/frontend.cpp)),
+which does what `swift-frontend` does with those arguments (`argv[0]` is
+`"swift-frontend"`, strings and the pointer array in linear memory from `lsp_alloc`). Stage
+36 links it from sourcekitd-request's link command plus the libraries swift-frontend's adds
+(`libswiftDriverTool` and what it needs), so the compiler's code, most of both modules, is
+there once: a page that both edits and compiles Swift downloads and compiles one module
+instead of `swift-frontend.wasm` and `sourcekit-lsp-lite-reactor.wasm`. Stage 36 prints the
+three modules' sizes.
+
+The host instantiates the compiled `WebAssembly.Module` once for the language server and
+again for **each** compile: `swift_frontend_main` runs the compiler as a process would
+(its `InitLLVM` shuts LLVM down on return), so an instance that compiled is spent, for
+compiling and for `lsp_*` alike. Instantiating is cheap next to compiling the module. A
+fatal compiler error that calls `exit` arrives as WASI `proc_exit`. `reactor_host.mjs
+--compile` does exactly this, and Stage 53 runs it.
+
 The server calls `SourceKit::WorkQueue::runPendingWork()` after every message and idle
 step (`src/pump.cpp`, linked against the patch's C++ declaration), so queued sourcekitd work
 does not pile up between requests; no C entry point was needed.
@@ -211,7 +231,7 @@ does not pile up between requests; no C entry point was needed.
 Leak and UndefinedBehavior sanitizers), `tidy` (clang-tidy as errors during the build,
 `.clang-tidy`), `cppcheck`, and `release`. ctest runs the doctest unit tests (JSON, text
 and position conversion, framing, options, request building, and translation of recorded
-sourcekitd responses in `tests/fixtures`), the reactor driven in process, and thirteen LSP
+sourcekitd responses in `tests/fixtures`), the reactor driven in process, and fourteen LSP
 scenarios over stdio against `tests/project`. [`lsp-lite.yml`](../.github/workflows/lsp-lite.yml)
 runs all of it, plus a wasm compile with the same warnings.
 

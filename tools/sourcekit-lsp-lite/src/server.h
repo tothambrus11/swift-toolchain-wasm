@@ -114,6 +114,16 @@ private:
   [[nodiscard]] json::Value documentHighlight(const json::Value &Params);
   [[nodiscard]] json::Value documentSymbol(const json::Value &Params);
   [[nodiscard]] json::Value signatureHelp(const json::Value &Params);
+  // Rename can be refused with a reason for the user: an empty result with
+  // \p Refusal set becomes a RequestFailed error.
+  [[nodiscard]] json::Value prepareRename(const json::Value &Params, std::string &Refusal);
+  [[nodiscard]] json::Value rename(const json::Value &Params, std::string &Refusal);
+  /// Where the symbol \p USR named \p Name occurs in the project, the
+  /// occurrence at \p At in \p Path first. At most \p PerFile textual
+  /// candidates are resolved per file.
+  [[nodiscard]] std::vector<Occurrence> occurrences(const std::string &Path, ByteOffset At,
+                                                    const std::string &USR, std::string_view Name,
+                                                    std::size_t PerFile);
   void dispatchRequest(const json::Value &Id, const std::string &Method, const json::Value &Params);
 
   // Diagnostics.

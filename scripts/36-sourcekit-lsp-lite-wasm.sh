@@ -14,10 +14,19 @@
 #                                        lsp_idle, ... (src/reactor.cpp), for a
 #                                        browser worker: a JS host calls it per
 #                                        message, so nothing blocks on stdin
+#   out/swift-frontend-lsp.wasm          that reactor plus swift_frontend_main
+#                                        (src/frontend.cpp): the compiler and
+#                                        the language server in one module, so
+#                                        a browser downloads the compiler's
+#                                        code once instead of twice
 #
-# The link command is not written out here. It is the one CMake generated for
-# sourcekitd-request, read back with `ninja -t commands`, because that is the
-# only list of sourcekitd's libraries guaranteed to match what Stage 35 built.
+# The link commands are not written out here. They are the ones CMake
+# generated for sourcekitd-request and swift-frontend, read back with `ninja -t
+# commands`, because those are the only lists of libraries guaranteed to match
+# what Stages 30 and 35 built. The combined module is sourcekitd-request's
+# link plus whatever swift-frontend's adds (libswiftDriverTool and what it
+# needs), minus both drivers' main objects; wasm-ld resolves archives in any
+# order, so appending them is enough.
 #
 # LITE_COMPILE_ONLY=1 compiles the server's own sources and stops, which needs
 # only the WASI SDK and sourcekitd.h (SOURCEKITD_INCLUDE), not Stage 35.
@@ -59,10 +68,13 @@ for name in "${SOURCES[@]}"; do
   "${WASI_SDK_PATH}/bin/clang++" "${CXXFLAGS[@]}" -c "${LITE_SRC}/src/${name}.cpp" -o "${OBJ}/${name}.o"
 done
 if [[ -f "${LLVM_BUILD}/include/llvm/Config/llvm-config.h" ]]; then
-  "${WASI_SDK_PATH}/bin/clang++" "${CXXFLAGS[@]}" "${PUMP_FLAGS[@]}" \
-    -c "${LITE_SRC}/src/pump.cpp" -o "${OBJ}/pump.o"
+  # frontend.cpp flushes llvm::outs(), so it needs LLVM's headers too.
+  for name in pump frontend; do
+    "${WASI_SDK_PATH}/bin/clang++" "${CXXFLAGS[@]}" "${PUMP_FLAGS[@]}" \
+      -c "${LITE_SRC}/src/${name}.cpp" -o "${OBJ}/${name}.o"
+  done
 elif [[ "$LITE_COMPILE_ONLY" == 1 ]]; then
-  warn "no LLVM build tree (${LLVM_BUILD}); not compiling pump.cpp"
+  warn "no LLVM build tree (${LLVM_BUILD}); not compiling pump.cpp and frontend.cpp"
 else
   die "no LLVM build tree at ${LLVM_BUILD}; run 20-llvm-wasm.sh"
 fi
@@ -79,34 +91,70 @@ link_command="$(ninja -C "$SWIFT_BUILD" -t commands -s bin/sourcekitd-request 2>
 [[ "$link_command" == *sourcekitd-request.cpp.o* ]] ||
   die "could not find sourcekitd-request's link command in ${SWIFT_BUILD}: ${link_command:0:200}"
 
-# Rewrites that command: the server's objects instead of the driver's, a new
-# output, and for the reactor no main and -mexec-model=reactor. Refuses
-# anything it does not understand (a response file, a compound command)
-# rather than guessing.
+# swift-frontend's, for the combined module. Stage 30 built it in this tree;
+# asking ninja for it again is a no-op that makes sure its libraries exist.
+ninja -C "$SWIFT_BUILD" -j "$JOBS" swift-frontend >/dev/null || die "swift-frontend is not built; run 30-swift-frontend-wasm.sh"
+frontend_link_command="$(ninja -C "$SWIFT_BUILD" -t commands -s bin/swift-frontend 2>/dev/null | tail -1)"
+[[ "$frontend_link_command" == */driver.cpp.o* ]] ||
+  die "could not find swift-frontend's link command in ${SWIFT_BUILD}: ${frontend_link_command:0:200}"
+
+# Rewrites sourcekitd-request's command: the server's objects instead of the
+# driver's, a new output, and for a reactor no main and -mexec-model=reactor.
+# Mode "combined" is a reactor that also takes every library and object of
+# swift-frontend's command (FRONTEND_LINK_COMMAND) that sourcekitd-request's
+# lacks, except its driver.cpp.o (main); flags only swift-frontend's command
+# has are printed, so a difference that matters can be seen. Refuses anything
+# it does not understand (a response file, a compound command) rather than
+# guessing.
 relink() {
   local output="$1" mode="$2"
   shift 2
-  LINK_COMMAND="$link_command" python3 - "$output" "$mode" "$@" <<'PY'
+  LINK_COMMAND="$link_command" FRONTEND_LINK_COMMAND="$frontend_link_command" \
+    python3 - "$output" "$mode" "$@" <<'PY'
 import os, shlex, subprocess, sys
 output, mode, objects = sys.argv[1], sys.argv[2], sys.argv[3:]
-command = os.environ["LINK_COMMAND"].strip()
-if command.startswith(": && "):
-    command = command[len(": && "):]
-if command.endswith(" && :"):
-    command = command[: -len(" && :")]
-if "&&" in command or ";" in command:
-    sys.exit(f"error: not a single link command: {command[:300]}")
-args = shlex.split(command)
-if any(a.startswith("@") for a in args):
-    sys.exit("error: the link uses a response file; relink sourcekitd-request with "
-             "`ninja -d keeprsp` so it is kept, then run this stage again")
+
+def parse(command, name):
+    command = command.strip()
+    if command.startswith(": && "):
+        command = command[len(": && "):]
+    if command.endswith(" && :"):
+        command = command[: -len(" && :")]
+    if "&&" in command or ";" in command:
+        sys.exit(f"error: not a single link command: {command[:300]}")
+    args = shlex.split(command)
+    if any(a.startswith("@") for a in args):
+        sys.exit(f"error: the link uses a response file; relink {name} with "
+                 "`ninja -d keeprsp` so it is kept, then run this stage again")
+    if "-o" not in args:
+        sys.exit(f"error: unexpected link command: {command[:300]}")
+    return args
+
+args = parse(os.environ["LINK_COMMAND"], "sourcekitd-request")
 driver = [i for i, a in enumerate(args) if a.endswith("sourcekitd-request.cpp.o")]
-if len(driver) != 1 or "-o" not in args:
-    sys.exit(f"error: unexpected link command: {command[:300]}")
+if len(driver) != 1:
+    sys.exit(f"error: unexpected link command: {shlex.join(args)[:300]}")
 args[driver[0]:driver[0] + 1] = objects
 args[args.index("-o") + 1] = output
-if mode == "reactor":
+if mode in ("reactor", "combined"):
     args.insert(1, "-mexec-model=reactor")
+if mode == "combined":
+    frontend = parse(os.environ["FRONTEND_LINK_COMMAND"], "swift-frontend")
+    del frontend[frontend.index("-o"):frontend.index("-o") + 2]
+    have = set(args)
+    extra, flags_only_there = [], []
+    for a in frontend[1:]:
+        if a.endswith("/driver.cpp.o") or a in have:
+            continue
+        if a.endswith((".a", ".o")) or a.startswith(("-l", "-L")):
+            extra.append(a)
+        else:
+            flags_only_there.append(a)
+    if flags_only_there:
+        print("note: swift-frontend's link also has " + shlex.join(flags_only_there), file=sys.stderr)
+    print(f"adding {len(extra)} of swift-frontend's libraries: " + " ".join(os.path.basename(e) for e in extra),
+          file=sys.stderr)
+    args += extra
 print("+ " + shlex.join(args)[:400] + " ...", file=sys.stderr)
 sys.exit(subprocess.call(args))
 PY
@@ -124,14 +172,25 @@ log "linking sourcekit-lsp-lite-reactor.wasm (a WASI reactor)"
 (cd "$SWIFT_BUILD" && relink "${OBJ}/sourcekit-lsp-lite-reactor.wasm" reactor \
   "${COMMON_OBJECTS[@]}" "${OBJ}/reactor.o") || die "linking the reactor failed"
 
-install -D "${OBJ}/sourcekit-lsp-lite.wasm" "${TC_OUT}/sourcekit-lsp-lite.wasm"
-install -D "${OBJ}/sourcekit-lsp-lite-reactor.wasm" "${TC_OUT}/sourcekit-lsp-lite-reactor.wasm"
-log "wrote ${TC_OUT}/sourcekit-lsp-lite.wasm ($(du -h "${TC_OUT}/sourcekit-lsp-lite.wasm" | cut -f1))"
-log "wrote ${TC_OUT}/sourcekit-lsp-lite-reactor.wasm ($(du -h "${TC_OUT}/sourcekit-lsp-lite-reactor.wasm" | cut -f1))"
+log "linking swift-frontend-lsp.wasm (a WASI reactor: the language server and the compiler)"
+(cd "$SWIFT_BUILD" && relink "${OBJ}/swift-frontend-lsp.wasm" combined \
+  "${COMMON_OBJECTS[@]}" "${OBJ}/reactor.o" "${OBJ}/frontend.o") || die "linking the combined module failed"
 
-# The reactor must export what a host calls; a missing export would only show
-# up in the browser otherwise. Read from the module's export section.
-python3 - "${TC_OUT}/sourcekit-lsp-lite-reactor.wasm" <<'PY' || die "the reactor is missing exports"
+for module in sourcekit-lsp-lite sourcekit-lsp-lite-reactor swift-frontend-lsp; do
+  install -D "${OBJ}/${module}.wasm" "${TC_OUT}/${module}.wasm"
+done
+# What one module saves over two, as the browser would download them.
+for module in swift-frontend sourcekit-lsp-lite-reactor swift-frontend-lsp; do
+  [[ -f "${TC_OUT}/${module}.wasm" ]] || continue
+  log "$(printf '%-28s %5s MiB raw, %5s MiB gzip -9' "${module}.wasm" \
+    "$(( $(stat -c %s "${TC_OUT}/${module}.wasm") >> 20 ))" \
+    "$(( $(gzip -9c "${TC_OUT}/${module}.wasm" | wc -c) >> 20 ))")"
+done
+
+# The reactors must export what a host calls; a missing export would only show
+# up in the browser otherwise. Read from the modules' export sections.
+for module in sourcekit-lsp-lite-reactor swift-frontend-lsp; do
+python3 - "${TC_OUT}/${module}.wasm" <<'PY' || die "${module}.wasm is missing exports"
 import sys
 data = open(sys.argv[1], "rb").read()
 def leb(i):
@@ -154,8 +213,11 @@ while i < len(data):
     i += size
 wanted = {"_initialize", "memory", "lsp_alloc", "lsp_free", "lsp_handle", "lsp_idle",
           "lsp_has_idle_work", "lsp_output", "lsp_exit_code"}
+if sys.argv[1].endswith("swift-frontend-lsp.wasm"):
+    wanted.add("swift_frontend_main")
 missing = wanted - exports
 if missing:
     sys.exit(f"missing exports: {sorted(missing)}")
-print("reactor exports: " + ", ".join(sorted(wanted)), file=sys.stderr)
+print(f"{sys.argv[1]} exports: " + ", ".join(sorted(wanted)), file=sys.stderr)
 PY
+done

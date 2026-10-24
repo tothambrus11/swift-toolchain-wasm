@@ -80,7 +80,9 @@ set_target_properties(sourcekit-lsp-lite PROPERTIES BUILD_RPATH "${SOURCEKITD_LI
 lite_analyze(sourcekit-lsp-lite)
 
 # The entry points a JavaScript host calls (the wasm reactor's exports),
-# natively a library the reactor test links.
+# natively a library the reactor test links. src/frontend.cpp, the compiler's
+# export in swift-frontend-lsp.wasm, is linked by Stage 36 only: it needs the
+# compiler's own libraries, which no toolchain ships.
 add_library(lite_reactor STATIC src/reactor.cpp)
 target_link_libraries(lite_reactor PUBLIC lite_server PRIVATE lite_no_exceptions)
 lite_analyze(lite_reactor)

@@ -218,6 +218,76 @@ TEST_SUITE("translate") {
     CHECK_FALSE(refersTo(F.Response, ""));
   }
 
+  TEST_CASE("renaming Point at a call renames the struct, not its synthesized initializer") {
+    const Fixture F = load("cursorinfo_point");
+    const RenameTarget T = renameTarget(F.Response, "Point");
+    CHECK(T.Refusal.empty());
+    CHECK(T.USR == "s:3App5PointV");
+    CHECK(T.Name == "Point");
+    CHECK(renameTarget(F.Response, "`Point`").USR == "s:3App5PointV");
+  }
+
+  TEST_CASE("the standard library, initializers, operators and empty answers cannot be renamed") {
+    const auto Print = json::parse(R"J({"key.kind":"source.lang.swift.ref.function.free",
+      "key.name":"print(_:separator:terminator:)","key.usr":"s:s5print","key.is_system":true,
+      "key.modulename":"Swift"})J");
+    REQUIRE(Print);
+    CHECK(renameTarget(*Print, "print").Refusal.find("outside the project") != std::string::npos);
+    const auto Init = json::parse(R"J({"key.kind":"source.lang.swift.decl.function.constructor",
+      "key.name":"init(x:)","key.usr":"s:1A","key.filepath":"/p/a.swift"})J");
+    REQUIRE(Init);
+    CHECK_FALSE(renameTarget(*Init, "init").Refusal.empty());
+    const auto Plus = json::parse(R"J({"key.kind":"source.lang.swift.decl.function.operator.infix",
+      "key.name":"+(_:_:)","key.usr":"s:1B","key.filepath":"/p/a.swift"})J");
+    REQUIRE(Plus);
+    CHECK_FALSE(renameTarget(*Plus, "+").Refusal.empty());
+    CHECK_FALSE(renameTarget(json::Value(), "x").Refusal.empty());
+    const Fixture F = load("cursorinfo_point");
+    CHECK_FALSE(renameTarget(F.Response, "x").Refusal.empty()); // not this symbol's name
+  }
+
+  TEST_CASE("a new name is one identifier, keywords in backticks, and never argument labels") {
+    CHECK(renameNameProblem("total").empty());
+    CHECK(renameNameProblem("_x2").empty());
+    CHECK(renameNameProblem("café").empty());
+    CHECK(renameNameProblem("`class`").empty());
+    CHECK(renameNameProblem("get").empty()); // contextual keywords are names
+    CHECK(renameNameProblem("class").find("keyword") != std::string::npos);
+    CHECK(renameNameProblem("moved(by:)").find("argument labels") != std::string::npos);
+    CHECK(renameNameProblem("moved(to:)").find("swift-syntax") != std::string::npos);
+    CHECK_FALSE(renameNameProblem("").empty());
+    CHECK_FALSE(renameNameProblem("_").empty());
+    CHECK_FALSE(renameNameProblem("2d").empty());
+    CHECK_FALSE(renameNameProblem("a b").empty());
+    CHECK_FALSE(renameNameProblem("a-b").empty());
+  }
+
+  TEST_CASE("a rename edit rewrites each occurrence in document order and nothing else") {
+    FakeFiles Files;
+    Files.Texts["/p/a.swift"] = "let b = 1\nprint(b, `b`)\n";
+    Files.Texts["/p/c.swift"] = "let 😀 = b\n";
+    const std::vector<Occurrence> Where{
+        {"/p/a.swift", {{16}, {17}}},  {"/p/a.swift", {{4}, {5}}},
+        {"/p/a.swift", {{4}, {5}}},   // reported twice
+        {"/p/a.swift", {{19}, {22}}}, // `b`
+        {"/p/a.swift", {{10}, {15}}}, // "print": not b, left alone
+        {"/p/c.swift", {{11}, {12}}}, // after a surrogate pair
+        {"/p/gone.swift", {{0}, {1}}},
+    };
+    const json::Value E = renameEdit(Where, "b", "total", Files, Encoding::UTF16);
+    const json::Value &A = E["changes"]["file:///p/a.swift"];
+    REQUIRE(A.size() == 3);
+    CHECK(A[std::size_t{0}]["range"]["start"]["character"].asInt() == 4);
+    CHECK(A[std::size_t{1}]["range"]["start"]["line"].asInt() == 1);
+    CHECK(A[std::size_t{1}]["range"]["start"]["character"].asInt() == 6);
+    CHECK(A[std::size_t{2}]["range"]["end"]["character"].asInt() == 12);
+    CHECK(A[std::size_t{2}]["newText"].asString() == "total");
+    const json::Value &C = E["changes"]["file:///p/c.swift"];
+    REQUIRE(C.size() == 1);
+    CHECK(C[std::size_t{0}]["range"]["start"]["character"].asInt() == 9);
+    CHECK_FALSE(E["changes"].has("file:///p/gone.swift"));
+  }
+
   TEST_CASE("kinds map to LSP's enumerations") {
     CHECK(completionKind("source.lang.swift.decl.function.method.instance") == 2);
     CHECK(completionKind("source.lang.swift.decl.function.free") == 3);

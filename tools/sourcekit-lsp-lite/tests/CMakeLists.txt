@@ -45,7 +45,7 @@ add_test(NAME reactor COMMAND lite_reactor_test)
 
 # One ctest test per scenario, so a failure names what failed.
 set(LITE_SCENARIOS
-  lifecycle diagnostics completion hover definition references highlights
+  lifecycle diagnostics completion hover definition references highlights rename
   symbols signature_help incremental_edits cross_file_edits utf16 errors)
 foreach(scenario IN LISTS LITE_SCENARIOS)
   add_test(NAME lsp.${scenario}

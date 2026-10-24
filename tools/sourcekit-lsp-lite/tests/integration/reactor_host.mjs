@@ -5,11 +5,14 @@
 // shim; the calls into the module are the same).
 //
 //   node reactor_host.mjs <reactor.wasm> [--dir guest=host ...] [--root /guest/project]
-//        [--file name ...] [-- compiler args]
+//        [--file name ...] [--compile] [-- compiler args]
 //
 // Without --root it only checks the lifecycle (initialize, shutdown, exit),
 // which needs no sourcekitd answers. With --root it opens each --file, waits
-// for diagnostics from lsp_idle and asks for a hover on the first identifier.
+// for diagnostics from lsp_idle, asks for a hover on the first identifier and
+// renames something. With --compile (swift-frontend-lsp.wasm only) it then
+// instantiates the same compiled module again and compiles the files to an
+// object with swift_frontend_main, as a browser's runner would.
 
 import { readFile } from 'node:fs/promises';
 import { WASI } from 'node:wasi';
@@ -20,12 +23,14 @@ const preopens = {};
 let root = null;
 const files = [];
 let compilerArgs = [];
+let compile = false;
 for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dir') {
         const [guest, host] = argv[++i].split('=');
         preopens[guest] = host;
     } else if (argv[i] === '--root') root = argv[++i];
     else if (argv[i] === '--file') files.push(argv[++i]);
+    else if (argv[i] === '--compile') compile = true;
     else if (argv[i] === '--') { compilerArgs = argv.slice(i + 1); break; }
 }
 
@@ -100,9 +105,49 @@ if (root) {
     const hover = request('textDocument/hover', {
         textDocument: { uri: `file://${root}/${files[0]}` }, position: { line: 0, character: 9 } });
     check(/struct Point/.test(hover?.result?.contents?.value ?? ''), 'hover answers from sourcekitd', hover);
+    const highlight = request('textDocument/documentHighlight', {
+        textDocument: { uri: `file://${root}/${files[0]}` }, position: { line: 0, character: 4 } });
+    check((highlight?.result?.length ?? 0) >= 2, 'documentHighlight answers from relatedidents', highlight);
+    const renamed = request('textDocument/rename', {
+        textDocument: { uri: `file://${root}/${files[0]}` }, position: { line: 0, character: 4 }, newName: 'origin' });
+    const edits = Object.values(renamed?.result?.changes ?? {}).flat();
+    check(edits.length >= 2 && edits.every((e) => e.newText === 'origin'), 'rename edits every use', renamed);
 }
 
 check(request('shutdown', null)?.result === null, 'shutdown');
 notify('exit', null);
 check(lsp.lsp_exit_code() === 0, 'exit after shutdown is 0');
+
+if (compile) {
+    // A fresh instance of the module compiled above: one compile per
+    // instance (src/frontend.cpp says why).
+    const started = performance.now();
+    const cwasi = new WASI({ version: 'preview1', args: ['swift-frontend'], env: { TMPDIR: '/tmp' }, preopens, returnOnExit: true });
+    const compiler = await WebAssembly.instantiate(module, cwasi.getImportObject());
+    cwasi.initialize(compiler);
+    const fe = compiler.exports;
+    check(typeof fe.swift_frontend_main === 'function', 'the module exports swift_frontend_main');
+    const output = '/tmp/reactor-host-main.o';
+    const args = ['swift-frontend', '-frontend', '-c', ...files.map((f) => `${root}/${f}`),
+        '-module-name', 'App', '-o', output, ...compilerArgs];
+    const pointers = args.map((a) => {
+        const bytes = encoder.encode(`${a}\0`);
+        const p = fe.lsp_alloc(bytes.length);
+        new Uint8Array(fe.memory.buffer, p, bytes.length).set(bytes);
+        return p;
+    });
+    const argvPointer = fe.lsp_alloc(4 * pointers.length);
+    new Uint32Array(fe.memory.buffer, argvPointer, pointers.length).set(pointers);
+    let status;
+    try {
+        status = fe.swift_frontend_main(args.length, argvPointer);
+    } catch (error) {
+        status = `threw ${error}`;
+    }
+    console.log(`  swift_frontend_main -c: ${(performance.now() - started).toFixed(1)} ms`);
+    check(status === 0, 'swift_frontend_main compiles the project', status);
+    const object = await readFile(`${preopens['/tmp']}/reactor-host-main.o`).catch(() => null);
+    check(object !== null && object.subarray(0, 4).equals(Buffer.from([0, 0x61, 0x73, 0x6d])),
+        'it writes a wasm object file', object?.length);
+}
 process.exit(failures ? 1 : 0);

@@ -3,6 +3,8 @@
 #include "translate.h"
 
 #include <algorithm>
+#include <array>
+#include <map>
 #include <utility>
 
 namespace lite {
@@ -363,6 +365,164 @@ bool refersTo(const json::Value &CursorInfo, std::string_view USR) {
   const auto &Secondary = CursorInfo["key.secondary_symbols"].elements();
   return std::any_of(Secondary.begin(), Secondary.end(),
                      [&](const json::Value &S) { return S["key.usr"].asString() == USR; });
+}
+
+namespace {
+
+/// Swift's reserved words: as a new name each needs backticks. Contextual
+/// keywords (get, set, willSet, some, any, ...) are valid identifiers.
+constexpr auto Keywords = std::to_array<std::string_view>({"associatedtype",
+                                                           "class",
+                                                           "deinit",
+                                                           "enum",
+                                                           "extension",
+                                                           "fileprivate",
+                                                           "func",
+                                                           "import",
+                                                           "init",
+                                                           "inout",
+                                                           "internal",
+                                                           "let",
+                                                           "open",
+                                                           "operator",
+                                                           "private",
+                                                           "precedencegroup",
+                                                           "protocol",
+                                                           "public",
+                                                           "rethrows",
+                                                           "static",
+                                                           "struct",
+                                                           "subscript",
+                                                           "typealias",
+                                                           "var",
+                                                           "break",
+                                                           "case",
+                                                           "catch",
+                                                           "continue",
+                                                           "default",
+                                                           "defer",
+                                                           "do",
+                                                           "else",
+                                                           "fallthrough",
+                                                           "for",
+                                                           "guard",
+                                                           "if",
+                                                           "in",
+                                                           "repeat",
+                                                           "return",
+                                                           "throw",
+                                                           "switch",
+                                                           "where",
+                                                           "while",
+                                                           "as",
+                                                           "Any",
+                                                           "false",
+                                                           "is",
+                                                           "nil",
+                                                           "self",
+                                                           "Self",
+                                                           "super",
+                                                           "throws",
+                                                           "true",
+                                                           "try"});
+
+bool isKeyword(std::string_view Name) noexcept {
+  return std::find(Keywords.begin(), Keywords.end(), Name) != Keywords.end();
+}
+
+/// A plain identifier: an identifier byte not starting with a digit, then
+/// identifier bytes. `_` alone is not a name.
+bool isPlainIdentifier(std::string_view Name) noexcept {
+  if (Name.empty() || Name == "_" || (Name.front() >= '0' && Name.front() <= '9'))
+    return false;
+  return std::all_of(Name.begin(), Name.end(),
+                     [](char C) { return isIdentifierByte(static_cast<unsigned char>(C)); });
+}
+
+std::string_view unbackticked(std::string_view Name) noexcept {
+  if (Name.size() > 2 && Name.front() == '`' && Name.back() == '`')
+    return Name.substr(1, Name.size() - 2);
+  return Name;
+}
+
+} // namespace
+
+RenameTarget renameTarget(const json::Value &CursorInfo, std::string_view Word) {
+  Word = unbackticked(Word);
+  if (Word.empty() || CursorInfo["key.usr"].asString().empty())
+    return {{}, {}, "There is no symbol here to rename."};
+  const json::Value *Symbol = nullptr;
+  if (baseName(CursorInfo["key.name"].asString()) == Word) {
+    Symbol = &CursorInfo;
+  } else {
+    for (const json::Value &S : CursorInfo["key.secondary_symbols"].elements())
+      if (baseName(S["key.name"].asString()) == Word) {
+        Symbol = &S;
+        break;
+      }
+  }
+  if (Symbol == nullptr)
+    return {{}, {}, "The name under the cursor is not the name of the symbol it refers to."};
+  const std::string &Kind = (*Symbol)["key.kind"].asString();
+  const std::string Name(Word);
+  if (Kind.ends_with(".module"))
+    return {{}, {}, "A module cannot be renamed."};
+  if (Name == "init" || Name == "deinit" || Name == "subscript" || Name == "self" ||
+      Name == "Self" || !isPlainIdentifier(Name))
+    return {{}, {}, "Initializers, subscripts, operators and self cannot be renamed."};
+  if ((*Symbol)["key.is_system"].asBool() || (*Symbol)["key.filepath"].asString().empty())
+    return {
+        {}, {}, "'" + Name + "' is declared outside the project, so it cannot be renamed here."};
+  return {(*Symbol)["key.usr"].asString(), Name, {}};
+}
+
+std::string renameNameProblem(std::string_view NewName) {
+  if (NewName.find_first_of("(:") != std::string_view::npos)
+    return "Only the base name can be renamed here: argument labels need swift-syntax, which "
+           "this sourcekitd is built without. Give the new name without labels.";
+  const std::string_view Bare = unbackticked(NewName);
+  if (!isPlainIdentifier(Bare))
+    return "'" + std::string(NewName) + "' is not a Swift identifier.";
+  if (Bare == NewName && isKeyword(NewName))
+    return "'" + std::string(NewName) + "' is a keyword; write it as `" + std::string(NewName) +
+           "` to use it as a name.";
+  return {};
+}
+
+json::Value renameEdit(std::span<const Occurrence> Occurrences, std::string_view OldName,
+                       std::string_view NewName, FileSource &Files, Encoding Enc) {
+  std::map<std::string, std::vector<ByteRange>, std::less<>> ByPath;
+  for (const Occurrence &O : Occurrences)
+    ByPath[O.Path].push_back(O.Range);
+  const std::string Backticked = "`" + std::string(OldName) + "`";
+  json::Value Changes = json::Value::object();
+  for (auto &[Path, Ranges] : ByPath) {
+    const std::optional<std::string> Text = Files.text(Path);
+    if (!Text)
+      continue;
+    std::sort(Ranges.begin(), Ranges.end(),
+              [](ByteRange A, ByteRange B) { return A.Begin < B.Begin; });
+    Ranges.erase(std::unique(Ranges.begin(), Ranges.end()), Ranges.end());
+    const LineTable Lines(*Text);
+    const DocumentView Doc(*Text, Lines, Enc);
+    json::Value Edits = json::Value::array();
+    for (const ByteRange R : Ranges) {
+      if (R.End.Value > Text->size() || R.End < R.Begin)
+        continue;
+      const std::string_view Written =
+          std::string_view(*Text).substr(R.Begin.Value, R.End.Value - R.Begin.Value);
+      if (Written != OldName && Written != Backticked)
+        continue;
+      json::Value Edit = json::Value::object();
+      Edit.set("range", Doc.range(R)).set("newText", NewName);
+      Edits.push(std::move(Edit));
+    }
+    if (Edits.size() > 0)
+      Changes.set(Files.uri(Path), std::move(Edits));
+  }
+  json::Value Result = json::Value::object();
+  Result.set("changes", std::move(Changes));
+  return Result;
 }
 
 int completionKind(std::string_view Kind) noexcept {

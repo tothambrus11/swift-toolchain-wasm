@@ -17,6 +17,8 @@
 //                               name until one has that USR, and
 //                               relatedidents from there
 //   documentHighlight           relatedidents
+//   prepareRename, rename       cursorinfo, then references' occurrences,
+//                               base names only (see renameNameProblem)
 //   documentSymbol              editor.open of a scratch copy, substructure
 //   signatureHelp               signaturehelp
 
@@ -45,6 +47,7 @@ constexpr int ParseError = -32700;
 constexpr int InvalidRequest = -32600;
 constexpr int MethodNotFound = -32601;
 constexpr int ServerNotInitialized = -32002;
+constexpr int RequestFailed = -32803;
 
 constexpr int TextDocumentSyncIncremental = 2;
 /// How many occurrences of a name references() resolves in one file before
@@ -245,6 +248,16 @@ void Server::dispatchRequest(const json::Value &Id, const std::string &Method,
     reply(Id, json::Value());
     return;
   }
+  if (Method == "textDocument/prepareRename" || Method == "textDocument/rename") {
+    std::string Refusal;
+    json::Value Result =
+        Method == "textDocument/rename" ? rename(Params, Refusal) : prepareRename(Params, Refusal);
+    if (Refusal.empty())
+      reply(Id, std::move(Result));
+    else
+      replyError(Id, RequestFailed, Refusal);
+    return;
+  }
   using Handler = json::Value (Server::*)(const json::Value &);
   static constexpr std::array<std::pair<std::string_view, Handler>, 7> Handlers{{
       {"textDocument/completion", &Server::completion},
@@ -255,12 +268,13 @@ void Server::dispatchRequest(const json::Value &Id, const std::string &Method,
       {"textDocument/documentSymbol", &Server::documentSymbol},
       {"textDocument/signatureHelp", &Server::signatureHelp},
   }};
-  const auto *const H = std::find_if(Handlers.begin(), Handlers.end(),
-                              [&](const auto &Entry) { return Entry.first == Method; });
-  if (H == Handlers.end())
-    replyError(Id, MethodNotFound, "unsupported method: " + Method);
-  else
-    reply(Id, (this->*(H->second))(Params));
+  // A loop, not std::find_if: see decodeEntitiesInto in text.cpp.
+  for (const auto &[Name, Handle] : Handlers)
+    if (Name == Method) {
+      reply(Id, (this->*Handle)(Params));
+      return;
+    }
+  replyError(Id, MethodNotFound, "unsupported method: " + Method);
 }
 
 bool Server::idle() {
@@ -309,6 +323,8 @@ json::Value Server::initialize(const json::Value &Params) {
   Completion.set("triggerCharacters", stringArray({"."})).set("resolveProvider", false);
   json::Value Signature = json::Value::object();
   Signature.set("triggerCharacters", stringArray({"(", ","}));
+  json::Value Rename = json::Value::object();
+  Rename.set("prepareProvider", true);
   json::Value Capabilities = json::Value::object();
   Capabilities.set("positionEncoding", Enc == Encoding::UTF8 ? "utf-8" : "utf-16")
       .set("textDocumentSync", std::move(Sync))
@@ -318,6 +334,7 @@ json::Value Server::initialize(const json::Value &Params) {
       .set("referencesProvider", true)
       .set("documentHighlightProvider", true)
       .set("documentSymbolProvider", true)
+      .set("renameProvider", std::move(Rename))
       .set("signatureHelpProvider", std::move(Signature));
   json::Value Info = json::Value::object();
   Info.set("name", "sourcekit-lsp-lite").set("version", "0.1.0");
@@ -575,8 +592,7 @@ json::Value Server::references(const json::Value &Params) {
   if (Doc == nullptr)
     return Locations;
   const ByteOffset At = Doc->view(Enc).offsetOf(Params["position"]);
-  const std::vector<std::string> Args = compilerArgs();
-  const skd::Reply Info = send(requests::cursorInfo(Doc->Path, At, Args));
+  const skd::Reply Info = send(requests::cursorInfo(Doc->Path, At, compilerArgs()));
   if (!Info.OK)
     return Locations;
   const std::string &USR = Info.Value["key.usr"].asString();
@@ -586,12 +602,23 @@ json::Value Server::references(const json::Value &Params) {
   const std::string &DeclFile = Info.Value["key.filepath"].asString();
   const ByteOffset DeclAt{Info.Value["key.offset"].asSize(SIZE_MAX)};
   const bool IncludeDeclaration = Params["context"]["includeDeclaration"].asBool(true);
+  for (const Occurrence &O : occurrences(Doc->Path, At, USR, Name, MaxCandidatesPerFile)) {
+    if (!IncludeDeclaration && O.Path == DeclFile && O.Range.Begin == DeclAt)
+      continue;
+    Locations.push(location(Sources, Enc, O.Path, O.Range));
+  }
+  return Locations;
+}
 
+std::vector<Occurrence> Server::occurrences(const std::string &DocPath, ByteOffset At,
+                                            const std::string &USR, std::string_view Name,
+                                            std::size_t PerFile) {
   // No index: a file refers to the symbol if one of its occurrences of the
   // name resolves to the same USR. relatedidents then finds the rest of that
   // file's references, semantically.
+  std::vector<Occurrence> Found;
   std::set<std::pair<std::string, std::size_t>> Seen;
-  const std::string DocPath = Doc->Path;
+  const std::vector<std::string> Args = compilerArgs();
   for (const std::string &Path : ProjectFiles) {
     const std::optional<std::string> Text = Sources.text(Path);
     if (!Text)
@@ -599,8 +626,8 @@ json::Value Server::references(const json::Value &Params) {
     std::vector<ByteOffset> Candidates = findIdentifier(*Text, Name);
     if (Path == DocPath)
       Candidates.insert(Candidates.begin(), identifierStart(*Text, At));
-    if (Candidates.size() > MaxCandidatesPerFile)
-      Candidates.resize(MaxCandidatesPerFile); // a common name; stop early
+    if (Candidates.size() > PerFile)
+      Candidates.resize(PerFile); // a common name; stop early
     for (const ByteOffset Candidate : Candidates) {
       const skd::Reply Here = send(requests::cursorInfo(Path, Candidate, Args));
       if (!Here.OK || !refersTo(Here.Value, USR))
@@ -610,16 +637,13 @@ json::Value Server::references(const json::Value &Params) {
           Related.OK ? identRanges(Related.Value) : std::vector<ByteRange>{};
       if (Ranges.empty())
         Ranges.push_back({Candidate, {Candidate.Value + Name.size()}});
-      for (const ByteRange &R : Ranges) {
-        if (!IncludeDeclaration && Path == DeclFile && R.Begin == DeclAt)
-          continue;
+      for (const ByteRange &R : Ranges)
         if (Seen.insert({Path, R.Begin.Value}).second)
-          Locations.push(location(Sources, Enc, Path, R));
-      }
+          Found.push_back({Path, R});
       break;
     }
   }
-  return Locations;
+  return Found;
 }
 
 json::Value Server::documentHighlight(const json::Value &Params) {
@@ -651,6 +675,50 @@ json::Value Server::signatureHelp(const json::Value &Params) {
   const ByteOffset At = Doc->view(Enc).offsetOf(Params["position"]);
   const skd::Reply R = send(requests::signatureHelp(Doc->Path, At, compilerArgs()));
   return R.OK ? lite::signatureHelp(R.Value, Enc) : json::Value();
+}
+
+json::Value Server::prepareRename(const json::Value &Params, std::string &Refusal) {
+  const Document *Doc = document(Params);
+  if (Doc == nullptr)
+    return {};
+  const DocumentView View = Doc->view(Enc);
+  ByteRange Word{identifierStart(Doc->Text, View.offsetOf(Params["position"])), {}};
+  Word.End = identifierEnd(Doc->Text, Word.Begin);
+  const std::string_view Name =
+      std::string_view(Doc->Text).substr(Word.Begin.Value, Word.End.Value - Word.Begin.Value);
+  const skd::Reply Info = send(requests::cursorInfo(Doc->Path, Word.Begin, compilerArgs()));
+  const RenameTarget Target = renameTarget(Info.OK ? Info.Value : json::Value(), Name);
+  if (!Target.Refusal.empty()) {
+    Refusal = Target.Refusal;
+    return {};
+  }
+  json::Value Result = json::Value::object();
+  Result.set("range", View.range(Word)).set("placeholder", Target.Name);
+  return Result;
+}
+
+json::Value Server::rename(const json::Value &Params, std::string &Refusal) {
+  const Document *Doc = document(Params);
+  if (Doc == nullptr)
+    return {};
+  const std::string &NewName = Params["newName"].asString();
+  Refusal = renameNameProblem(NewName);
+  if (!Refusal.empty())
+    return {};
+  const ByteOffset At = identifierStart(Doc->Text, Doc->view(Enc).offsetOf(Params["position"]));
+  const std::string_view Word =
+      std::string_view(Doc->Text).substr(At.Value, identifierEnd(Doc->Text, At).Value - At.Value);
+  const skd::Reply Info = send(requests::cursorInfo(Doc->Path, At, compilerArgs()));
+  const RenameTarget Target = renameTarget(Info.OK ? Info.Value : json::Value(), Word);
+  if (!Target.Refusal.empty()) {
+    Refusal = Target.Refusal;
+    return {};
+  }
+  // Every occurrence, not the first MaxCandidatesPerFile per file: a rename
+  // that misses one breaks the program.
+  const std::vector<Occurrence> Where =
+      occurrences(Doc->Path, At, Target.USR, Target.Name, SIZE_MAX);
+  return renameEdit(Where, Target.Name, NewName, Sources, Enc);
 }
 
 } // namespace lite

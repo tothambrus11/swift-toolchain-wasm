@@ -247,7 +247,8 @@ def lifecycle(args, scratch):
         s_init = client.result("initialize", {"processId": None, "rootUri": None, "capabilities": {}})
         caps = s_init["capabilities"]
         for provider in ["completionProvider", "hoverProvider", "definitionProvider",
-                         "referencesProvider", "documentSymbolProvider", "signatureHelpProvider"]:
+                         "referencesProvider", "documentSymbolProvider", "signatureHelpProvider",
+                         "renameProvider"]:
             check(provider in caps, f"initialize advertises {provider}", caps)
         check(caps["positionEncoding"] == "utf-16", "UTF-16 positions unless the client offers UTF-8", caps)
         check(s_init["serverInfo"]["name"] == "sourcekit-lsp-lite", "the server says what it is", s_init)
@@ -395,6 +396,57 @@ def highlights(args, scratch):
     s.finish()
 
 
+def apply_edits(text: str, edits: list[dict]) -> str:
+    """Applies LSP TextEdits (ASCII text, so UTF-16 columns are indices)."""
+    lines = text.split("\n")
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line) + 1)
+    spans = sorted(((offsets[e["range"]["start"]["line"]] + e["range"]["start"]["character"],
+                     offsets[e["range"]["end"]["line"]] + e["range"]["end"]["character"],
+                     e["newText"]) for e in edits), reverse=True)
+    for begin, end, new in spans:
+        text = text[:begin] + new + text[end:]
+    return text
+
+
+def rename(args, scratch):
+    s = Session(args, scratch)
+    s.open_all()
+    s.diagnostics("main.swift")
+    got = s.client.result("textDocument/prepareRename",
+                          s.doc("main.swift", s.at("main.swift", "b =", 0)), "prepare rename")
+    check(got["placeholder"] == "b" and got["range"]["start"] == {"line": 1, "character": 4} and
+          got["range"]["end"] == {"line": 1, "character": 5}, "prepareRename names the word", got)
+    refused = s.client.request("textDocument/prepareRename", s.doc("main.swift", s.at("main.swift", "print")))
+    check(refused.get("error", {}).get("code") == -32803 and "outside the project" in refused["error"]["message"],
+          "the standard library's print cannot be renamed, and says why", refused)
+    labels_ = s.client.request("textDocument/rename", {**s.doc("main.swift", s.at("main.swift", "norm", 1)),
+                                                       "newName": "length(by:)"})
+    check(labels_.get("error", {}).get("code") == -32803 and "argument labels" in labels_["error"]["message"],
+          "argument labels are refused rather than half-renamed", labels_)
+
+    got = s.client.result("textDocument/rename", {**s.doc("main.swift", s.at("main.swift", "norm", 1)),
+                                                  "newName": "length"}, "rename norm (3 files)")
+    changes = {Path(uri).name: edits for uri, edits in got["changes"].items()}
+    check(len(changes.get("Geometry.swift", [])) == 2 and len(changes.get("main.swift", [])) == 1,
+          "the declaration, the use in distance and the use in main.swift", changes)
+    since = len(s.client.notifications)
+    for uri, edits in got["changes"].items():
+        name = str(Path(uri.removeprefix("file://")).relative_to(s.project))
+        s.replace(name, apply_edits(s.files[name], edits))
+    check("b.length()" in s.files["main.swift"] and "func length()" in s.files["Geometry.swift"],
+          "the edits rename every use", s.files)
+    for name in ("main.swift", "Geometry.swift"):
+        check(not errors(s.diagnostics(name, since)), f"{name} still compiles after the rename")
+    got = s.client.result("textDocument/rename", {**s.doc("Geometry.swift", s.at("Geometry.swift", "Point", 1)),
+                                                  "newName": "Vector"})
+    total = sum(len(e) for e in got["changes"].values())
+    check(total >= 6 and all(e["newText"] == "Vector" for es in got["changes"].values() for e in es),
+          "a type renames at its declaration, annotations and initializer calls", got)
+    s.finish()
+
+
 def symbols(args, scratch):
     s = Session(args, scratch)
     s.open_all()
@@ -523,6 +575,7 @@ SCENARIOS: dict[str, Callable] = {
     "references": references,
     "highlights": highlights,
     "symbols": symbols,
+    "rename": rename,
     "signature_help": signature_help,
     "incremental_edits": incremental_edits,
     "cross_file_edits": cross_file_edits,

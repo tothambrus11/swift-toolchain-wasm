@@ -237,9 +237,16 @@ void decodeEntitiesInto(std::string_view S, std::string &Out) {
       Out += S[I];
       continue;
     }
-    const auto *const E = std::find_if(Entities.begin(), Entities.end(),
-                                [&](const Entity &En) { return S.substr(I).starts_with(En.Name); });
-    if (E == Entities.end()) {
+    // A loop, not std::find_if: its iterator is a pointer in libstdc++ and a
+    // class in the WASI SDK's libc++, and no one spelling satisfies both the
+    // wasm compile and clang-tidy's readability-qualified-auto.
+    const Entity *E = nullptr;
+    for (const Entity &Candidate : Entities)
+      if (S.substr(I).starts_with(Candidate.Name)) {
+        E = &Candidate;
+        break;
+      }
+    if (E == nullptr) {
       Out += '&';
     } else {
       Out += E->Char;
