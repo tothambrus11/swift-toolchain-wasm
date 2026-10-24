@@ -1,0 +1,256 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 960104c..2b84a05 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -381,6 +381,13 @@ if(SWIFT_ENABLE_SWIFT_IN_SWIFT)
+       CROSSCOMPILE-WITH-HOSTLIBS:    build with a bootstrapping-with-hostlibs compiled
+                                      compiler, provided in `SWIFT_NATIVE_SWIFT_TOOLS_PATH`
+   ]=])
++elseif(SWIFT_HOST_VARIANT_SDK STREQUAL "WASI" AND SWIFT_BUILD_SWIFT_SYNTAX)
++  # A WASI host can have the Swift parser (ASTGen, and with it macros) without
++  # the Swift-implemented SIL optimizer. ASTGen and the compiler's swift-syntax
++  # are plain Swift libraries compiled by CMake's Swift language support for
++  # the WASI triple; nothing has to be bootstrapped. SwiftCompilerSources is a
++  # separate, larger step that a WASI host does not need to expand macros.
++  set(BOOTSTRAPPING_MODE OFF)
+ else()
+   set(BOOTSTRAPPING_MODE OFF)
+   set(SWIFT_BUILD_SWIFT_SYNTAX OFF)
+@@ -1043,7 +1050,8 @@ if(SWIFT_ENABLE_SWIFT_IN_SWIFT)
+   endif()
+ endif()
+ 
+-if(SWIFT_INCLUDE_TOOLS AND SWIFT_BUILD_SWIFT_SYNTAX AND SWIFT_ENABLE_SWIFT_IN_SWIFT)
++if(SWIFT_INCLUDE_TOOLS AND SWIFT_BUILD_SWIFT_SYNTAX AND
++   (SWIFT_ENABLE_SWIFT_IN_SWIFT OR SWIFT_HOST_VARIANT_SDK STREQUAL "WASI"))
+   # Only "HOSTTOOLS" is supported in Linux when Swift parser integration is enabled.
+   if(SWIFT_HOST_VARIANT_SDK MATCHES "LINUX|OPENBSD|FREEBSD" AND NOT BOOTSTRAPPING_MODE STREQUAL "HOSTTOOLS")
+     message(WARNING "Force setting BOOTSTRAPPING=HOSTTOOLS because Swift parser integration is enabled")
+diff --git a/cmake/modules/AddSwift.cmake b/cmake/modules/AddSwift.cmake
+index 289716e..611f08f 100644
+--- a/cmake/modules/AddSwift.cmake
++++ b/cmake/modules/AddSwift.cmake
+@@ -601,6 +601,29 @@ function(_add_swift_runtime_link_flags target relpath_to_lib_dir bootstrapping)
+     else()
+       message(FATAL_ERROR "Unknown BOOTSTRAPPING_MODE '${ASRLF_BOOTSTRAPPING_MODE}'")
+     endif()
++  elseif(SWIFT_HOST_VARIANT_SDK STREQUAL "WASI")
++    # A WASI host links the Swift runtime statically, from the Swift SDK for
++    # WebAssembly whose toolchain directory SWIFT_PATH_TO_SWIFT_SDK names
++    # (`swift.xctoolchain/usr` in the SDK bundle). There is no shared runtime
++    # and so no rpath. The C++ linker does not read the autolink entries in
++    # Swift objects, so the libraries the compiler's Swift code needs are
++    # named here, as swift-autolink-extract lists them for ASTGen, MacroEvaluation
++    # and the compiler's swift-syntax: the runtime, Concurrency (imported
++    # implicitly by every Swift module), the WASILibc overlay that swift-syntax
++    # imports, and Cxx, which ASTGen's C++ interoperability uses. wasm-ld
++    # resolves archives in any order, so the order here does not matter.
++    if(NOT SWIFT_PATH_TO_SWIFT_SDK)
++      message(FATAL_ERROR "SWIFT_PATH_TO_SWIFT_SDK must name the toolchain "
++        "directory of the Swift SDK for WebAssembly (swift.xctoolchain/usr) "
++        "to link Swift code into a WASI-hosted compiler")
++    endif()
++    set(host_lib_dir "${SWIFT_PATH_TO_SWIFT_SDK}/lib/swift_static/wasi")
++    target_link_libraries(${target} PRIVATE
++      "${host_lib_dir}/${SWIFT_HOST_VARIANT_ARCH}/swiftrt${CMAKE_C_OUTPUT_EXTENSION}"
++      "${host_lib_dir}/libswiftCore.a"
++      "${host_lib_dir}/libswift_Concurrency.a"
++      "${host_lib_dir}/libswiftWASILibc.a"
++      "${SWIFT_PATH_TO_SWIFT_SDK}/lib/swift/wasi/libswiftCxx.a")
+   else()
+     target_link_directories(${target} PRIVATE
+       ${SWIFT_PATH_TO_SWIFT_SDK}/usr/lib/swift/${SWIFT_SDK_${SWIFT_HOST_VARIANT_SDK}_LIB_SUBDIR}/${SWIFT_HOST_VARIANT_ARCH})
+diff --git a/lib/AST/PluginLoader.cpp b/lib/AST/PluginLoader.cpp
+index 988543a..9ffc38f 100644
+--- a/lib/AST/PluginLoader.cpp
++++ b/lib/AST/PluginLoader.cpp
+@@ -53,6 +53,14 @@ static StringRef pluginModuleNameStringFromPath(StringRef path) {
+ #endif
+ 
+   StringRef filename = llvm::sys::path::filename(path);
++#if defined(__wasi__)
++  // On a WASI host a plugin "library" is a wasm module that the embedder
++  // instantiates (see PluginRegistry.cpp), so 'lib${module name}.wasm' names
++  // one too, whatever the shared library suffix is.
++  constexpr StringRef wasmSuffix = ".wasm";
++  if (filename.starts_with(libPrefix) && filename.ends_with(wasmSuffix))
++    return filename.drop_front(libPrefix.size()).drop_back(wasmSuffix.size());
++#endif
+   if (filename.starts_with(libPrefix) && filename.ends_with(libSuffix)) {
+     // We don't check if the result it a valid identifier. Even if we put
+     // invalid name in the lookup table, clients wound not be able to lookup
+@@ -229,6 +237,13 @@ PluginLoader::lookupPluginByModuleName(Identifier moduleName) {
+ 
+ llvm::Expected<CompilerPlugin *> PluginLoader::getInProcessPlugins() {
+   auto inProcPluginServerPath = Ctx.SearchPathOpts.InProcessPluginServerPath;
++#if defined(__wasi__) && defined(SWIFT_BUILD_SWIFT_SYNTAX)
++  // The embedder is the in-process plugin server and there is no library to
++  // find, so the path is only a name and need not exist.
++  if (inProcPluginServerPath.empty())
++    inProcPluginServerPath = "swift_plugin_host";
++  return getRegistry()->getInProcessPlugins(inProcPluginServerPath);
++#else
+   if (inProcPluginServerPath.empty()) {
+     return llvm::createStringError(
+         llvm::inconvertibleErrorCode(),
+@@ -242,6 +257,7 @@ llvm::Expected<CompilerPlugin *> PluginLoader::getInProcessPlugins() {
+   }
+ 
+   return getRegistry()->getInProcessPlugins(resolvedPath);
++#endif
+ }
+ 
+ llvm::Expected<CompilerPlugin *>
+diff --git a/lib/AST/PluginRegistry.cpp b/lib/AST/PluginRegistry.cpp
+index d526957..3dd7c55 100644
+--- a/lib/AST/PluginRegistry.cpp
++++ b/lib/AST/PluginRegistry.cpp
+@@ -38,6 +38,49 @@ PluginRegistry::PluginRegistry() {
+   dumpMessaging = ::getenv("SWIFT_DUMP_PLUGIN_MESSAGING") != nullptr;
+ }
+ 
++#if defined(__wasi__) && defined(SWIFT_BUILD_SWIFT_SYNTAX)
++// A WASI host has no dlopen, so there is no plugin server library to load.
++// The embedder is the plugin server: it provides these two functions as wasm
++// imports from the module "swift_plugin_host", answers the server's messages
++// (getCapability, loadPluginLibrary) itself, and runs the macro plugins, which
++// are wasm modules of their own.
++//
++// The calls are synchronous. `handle_message` receives one JSON request,
++// handles it, keeps the response, stores its length in bytes at
++// `responseLength`, and returns 0, or nonzero if the response is an error
++// message rather than a reply. `take_response` then copies those bytes to
++// `buffer`, which the compiler has allocated with exactly that length, and
++// forgets them. A frontend built this way cannot be instantiated without the
++// imports, even for a file that uses no macros.
++extern "C" {
++__attribute__((import_module("swift_plugin_host"),
++               import_name("handle_message"))) int32_t
++swift_plugin_host_handle_message(const char *request, uint32_t requestLength,
++                                 uint32_t *responseLength);
++
++__attribute__((import_module("swift_plugin_host"),
++               import_name("take_response"))) void
++swift_plugin_host_take_response(char *buffer);
++}
++
++/// `InProcessPlugins::HandleMessageFunction` over the embedder's imports.
++static bool handleMessageWithEmbedder(const char *requestData,
++                                      size_t requestLength,
++                                      char **responseDataPtr,
++                                      size_t *responseDataLengthPtr) {
++  uint32_t responseLength = 0;
++  int32_t status = swift_plugin_host_handle_message(
++      requestData, static_cast<uint32_t>(requestLength), &responseLength);
++  // Always take the response, so the embedder never holds a stale one. The
++  // caller frees the buffer; malloc(0) may return null, so ask for a byte.
++  auto *buffer = static_cast<char *>(malloc(responseLength ? responseLength : 1));
++  swift_plugin_host_take_response(buffer);
++  *responseDataPtr = buffer;
++  *responseDataLengthPtr = responseLength;
++  return status != 0;
++}
++#endif
++
+ CompilerPlugin::~CompilerPlugin() {
+   // Let ASTGen do cleanup things.
+   if (this->cleanup)
+@@ -46,6 +89,10 @@ CompilerPlugin::~CompilerPlugin() {
+ 
+ llvm::Expected<std::unique_ptr<InProcessPlugins>>
+ InProcessPlugins::create(const char *serverPath) {
++#if defined(__wasi__) && defined(SWIFT_BUILD_SWIFT_SYNTAX)
++  return std::unique_ptr<InProcessPlugins>(
++      new InProcessPlugins(serverPath, handleMessageWithEmbedder));
++#else
+   std::string err;
+   auto server = loadLibrary(serverPath, &err);
+   if (!server) {
+@@ -60,6 +107,7 @@ InProcessPlugins::create(const char *serverPath) {
+   }
+   return std::unique_ptr<InProcessPlugins>(new InProcessPlugins(
+       serverPath, reinterpret_cast<HandleMessageFunction>(funcPtr)));
++#endif
+ }
+ 
+ llvm::Error InProcessPlugins::sendMessage(llvm::StringRef message) {
+diff --git a/lib/CompilerSwiftSyntax/CMakeLists.txt b/lib/CompilerSwiftSyntax/CMakeLists.txt
+index 52d0dc7..8c1a387 100644
+--- a/lib/CompilerSwiftSyntax/CMakeLists.txt
++++ b/lib/CompilerSwiftSyntax/CMakeLists.txt
+@@ -13,7 +13,13 @@ function(includeSwiftSyntax)
+   set(CMAKE_C_COMPILER_TARGET ${SWIFT_HOST_TRIPLE})
+   set(CMAKE_CXX_COMPILER_TARGET ${SWIFT_HOST_TRIPLE})
+   set(CMAKE_Swift_COMPILER_TARGET ${SWIFT_HOST_TRIPLE})
+-  set(BUILD_SHARED_LIBS ON)
++  if(SWIFT_HOST_VARIANT_SDK STREQUAL "WASI")
++    # WASI has no dynamic linking: the compiler's swift-syntax is linked into
++    # swift-frontend like every other compiler library.
++    set(BUILD_SHARED_LIBS OFF)
++  else()
++    set(BUILD_SHARED_LIBS ON)
++  endif()
+   set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${SWIFT_HOST_LIBRARIES_DEST_DIR}/compiler")
+   set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${SWIFT_HOST_LIBRARIES_DEST_DIR}/compiler")
+   if(SWIFT_HOST_VARIANT_SDK MATCHES "LINUX|ANDROID|OPENBSD|FREEBSD")
+diff --git a/lib/Macros/CMakeLists.txt b/lib/Macros/CMakeLists.txt
+index bd9e621..25a72f9 100644
+--- a/lib/Macros/CMakeLists.txt
++++ b/lib/Macros/CMakeLists.txt
+@@ -76,5 +76,10 @@ function(add_swift_macro_library name)
+   set_property(GLOBAL APPEND PROPERTY SWIFT_MACRO_PLUGINS ${name})
+ endfunction()
+ 
+-add_subdirectory(Sources/SwiftMacros)
+-add_subdirectory(Sources/ObservationMacros)
++# Macro plugins are shared libraries the compiler loads. A WASI host cannot
++# load them; its plugins are built as separate wasm modules and run by the
++# embedder (see the WASI arm of lib/AST/PluginRegistry.cpp).
++if(NOT SWIFT_HOST_VARIANT_SDK STREQUAL "WASI")
++  add_subdirectory(Sources/SwiftMacros)
++  add_subdirectory(Sources/ObservationMacros)
++endif()
+diff --git a/lib/SwiftSyntax/CMakeLists.txt b/lib/SwiftSyntax/CMakeLists.txt
+index 4beb204..194b130 100644
+--- a/lib/SwiftSyntax/CMakeLists.txt
++++ b/lib/SwiftSyntax/CMakeLists.txt
+@@ -1,6 +1,12 @@
+ if(NOT SWIFT_BUILD_SWIFT_SYNTAX)
+   return()
+ endif()
++# These are the shared swift-syntax libraries that host plugins and
++# swift-plugin-server link against. A WASI host loads no shared libraries:
++# its macro plugins are separate wasm modules with their own swift-syntax.
++if(SWIFT_HOST_VARIANT_SDK STREQUAL "WASI")
++  return()
++endif()
+ if(NOT EXISTS "${SWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE}")
+   message(SEND_ERROR "swift-syntax is required to build the Swift compiler. Please run update-checkout or specify SWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE")
+   return()
+diff --git a/tools/driver/CMakeLists.txt b/tools/driver/CMakeLists.txt
+index 1726f14..4a58763 100644
+--- a/tools/driver/CMakeLists.txt
++++ b/tools/driver/CMakeLists.txt
+@@ -12,7 +12,9 @@ function(add_swift_parser_link_libraries target)
+     foreach(macrolib ${SWIFT_MACRO_PLUGINS})
+       add_dependencies(${target} ${macrolib})
+     endforeach()
+-    add_dependencies(${target} SwiftInProcPluginServer)
++    if(TARGET SwiftInProcPluginServer)
++      add_dependencies(${target} SwiftInProcPluginServer)
++    endif()
+   endif()
+ endfunction()
+ 
+diff --git a/tools/swift-plugin-server/CMakeLists.txt b/tools/swift-plugin-server/CMakeLists.txt
+index 6db1f51..02b8f09 100644
+--- a/tools/swift-plugin-server/CMakeLists.txt
++++ b/tools/swift-plugin-server/CMakeLists.txt
+@@ -1,4 +1,6 @@
+-if (SWIFT_BUILD_SWIFT_SYNTAX)
++# Both are processes or shared libraries hosting plugins next to the compiler;
++# a WASI host has neither, and its embedder runs the plugins instead.
++if (SWIFT_BUILD_SWIFT_SYNTAX AND NOT SWIFT_HOST_VARIANT_SDK STREQUAL "WASI")
+   add_pure_swift_host_tool(swift-plugin-server
+     Sources/swift-plugin-server/swift-plugin-server.swift
+     SWIFT_COMPONENT

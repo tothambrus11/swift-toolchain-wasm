@@ -9,6 +9,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 STAGES=(
   00-fetch-sources
   05-apply-patches
+  # Needs only the sources and the native toolchain, and takes minutes where the
+  # stages after it take hours, so it runs first and fails early.
+  37-macro-plugins
   10-host-tools
   15-cmark-wasm
   20-llvm-wasm
@@ -23,6 +26,12 @@ STAGES=(
 # new, and nothing after them depends on them. The workflow checks their
 # artifacts separately.
 OPTIONAL_STAGES=(36-sourcekit-lsp-lite-wasm)
+# Macro support (SWIFT_MACROS=1) is new: until it is the default, SourceKit
+# built with the compiler's Swift parser in it must not stop the build that
+# proves macros work.
+if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
+  OPTIONAL_STAGES+=(35-sourcekitd-wasm)
+fi
 
 # Optionally stop early, e.g. BUILD_UNTIL=20-llvm-wasm ./scripts/build-all.sh
 : "${BUILD_UNTIL:=}"

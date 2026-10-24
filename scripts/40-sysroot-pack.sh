@@ -12,42 +12,18 @@
 # by hand to confirm it links and the program runs.
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-# Get the wasm SDK bundle ourselves rather than hunting for what `swift sdk install`
-# did with it.
-#
-# Three CI runs died here with "wasm SDK not installed" while `swift sdk list` printed
-# the SDK happily in the very next line — SwiftPM knows where it put the bundle, and
-# every guess at that path (two locations, then four, then following symlinks) was
-# wrong on the runner and right on my machine. The bundle is a plain tarball at a URL
-# this repository already pins, with a checksum it already knows, so downloading and
-# extracting it is deterministic and removes the guessing entirely. It lands in the
-# cached sources directory, so CI pays for it once.
-SDK_ROOT="${TC_SRC}/swift-wasm-sdk"
-
+# The SDK bundle: downloaded and checksummed by scripts/wasm-sdk.sh, which, with
+# SWIFT_MACROS=1, also puts the patched wasi-libc.modulemap (C++ interoperability)
+# into it. SDK_BUNDLE may name an unpacked bundle instead.
 if [[ -z "${SDK_BUNDLE:-}" ]]; then
-  if [[ ! -d "$SDK_ROOT" ]]; then
-    log "downloading the wasm SDK bundle (${SWIFT_TAG})"
-    tmp="$(mktemp -d)"
-    curl -fsSL --retry 3 -o "${tmp}/wasm-sdk.tar.gz" "$SWIFT_WASM_SDK_URL"
-    actual="$(sha256sum "${tmp}/wasm-sdk.tar.gz" | cut -d' ' -f1)"
-    if [[ "$actual" != "$SWIFT_WASM_SDK_CHECKSUM" ]]; then
-      rm -rf "$tmp"
-      die "wasm SDK checksum mismatch: expected ${SWIFT_WASM_SDK_CHECKSUM}, got ${actual}"
-    fi
-    mkdir -p "$SDK_ROOT"
-    tar -xzf "${tmp}/wasm-sdk.tar.gz" -C "$SDK_ROOT"
-    rm -rf "$tmp"
-  fi
-  SDK_BUNDLE="$(dirname "$(find -L "$SDK_ROOT" -maxdepth 5 -type d -name WASI.sdk -print -quit)")"
+  source "${TOOLCHAIN_ROOT}/scripts/wasm-sdk.sh"
+  fetch_wasm_sdk
+  SDK_BUNDLE="$WASM_SDK_BUNDLE"
 fi
 
 STAGE="${TC_BUILD}/sysroot"
 
-if [[ -z "${SDK_BUNDLE:-}" || ! -d "${SDK_BUNDLE}/WASI.sdk" ]]; then
-  warn "no WASI.sdk under ${SDK_ROOT}; its contents are:"
-  find -L "$SDK_ROOT" -maxdepth 3 >&2 2>/dev/null || true
-  die "wasm SDK bundle did not contain a WASI.sdk directory"
-fi
+[[ -d "${SDK_BUNDLE}/WASI.sdk" ]] || die "no WASI.sdk in ${SDK_BUNDLE}"
 log "using wasm SDK at ${SDK_BUNDLE}"
 
 rm -rf "$STAGE"
@@ -70,9 +46,14 @@ prune() {
     -exec rm -rf {} + 2>/dev/null || true
 }
 
-# Test frameworks are never usable in the playground, whatever the profile.
-prune -name 'XCTest.*' -o -name 'libXCTest*' -o -name 'Testing.*' -o -name 'libTesting*' \
-      -o -name '*.swiftcrossimport'
+# XCTest is never usable in the playground, whatever the profile. swift-testing
+# is, once the compiler can expand its macros: a macro-enabled toolchain keeps
+# Testing and the libraries it links (_TestDiscovery, _TestingInternals,
+# _TestingInterop); otherwise they go too.
+prune -name 'XCTest.*' -o -name 'libXCTest*'
+if [[ "${SWIFT_MACROS:-0}" != "1" ]]; then
+  prune -name 'Testing.*' -o -name 'libTesting*' -o -name '*.swiftcrossimport'
+fi
 
 case "$SYSROOT_PROFILE" in
   core)

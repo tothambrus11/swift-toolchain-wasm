@@ -23,4 +23,13 @@ snapshot() {
 }
 
 snapshot llvm "$LLVM_SRC" 0001-wasi-host-support.patch
-snapshot swift "${TC_SRC}/swift" 0001-wasi-host-support.patch
+# The swift series has more than one patch (0002 and on are separate so each can
+# go upstream on its own), and a snapshot of the tree would fold them all into
+# 0001. Regenerate it by hand: apply 0001, commit, apply the rest, diff.
+shopt -s nullglob
+swift_patches=("${TOOLCHAIN_ROOT}/patches/swift"/*.patch)
+if (( ${#swift_patches[@]} > 1 )); then
+  warn "not snapshotting swift: it has ${#swift_patches[@]} patches; regenerate them by hand"
+else
+  snapshot swift "${TC_SRC}/swift" 0001-wasi-host-support.patch
+fi

@@ -49,4 +49,20 @@ else
     "${TC_SRC}/swift-corelibs-libdispatch"
 fi
 
+# Macro support (SWIFT_MACROS=1) builds the compiler's Swift parser, which is
+# swift-syntax and the regex parser from swift-experimental-string-processing,
+# and Stage 37 builds swift-testing's macro plugin. Each at the tag of this
+# Swift release, so the plugin matches the Testing library in the Swift SDK.
+if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
+  for repo in swift-syntax swift-experimental-string-processing swift-testing; do
+    if [[ -d "${TC_SRC}/${repo}/Sources" ]]; then
+      log "${repo} already present"
+    else
+      log "cloning swiftlang/${repo} @ ${SWIFT_TAG} (shallow)"
+      git clone --depth 1 --branch "$SWIFT_TAG" --single-branch \
+        "https://github.com/swiftlang/${repo}.git" "${TC_SRC}/${repo}"
+    fi
+  done
+fi
+
 log "sources ready"

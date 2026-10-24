@@ -26,8 +26,15 @@
 # off costs the Swift-implemented SIL optimizer passes — acceptable for a frontend that
 # compiles at -Onone — and it is the switch to flip once interop is fixed.
 #
-# Macros and compiler plugins remain impossible regardless: they are spawned executables,
-# and WASI can spawn nothing (see WASI/Program.inc). Hence SWIFT_BUILD_SWIFT_SYNTAX=OFF.
+# Macros need the compiler's Swift parser (ASTGen and the compiler's swift-syntax), and a
+# native compiler runs macro plugins as processes or shared libraries, neither of which
+# WASI has. With SWIFT_MACROS=1 this stage builds that parser in anyway, and patch 0003
+# sends the in-process plugin channel to the embedder (tools/plugin-host), which runs
+# plugins that are themselves wasm (Stage 37). The Swift code is compiled by the native
+# swiftc for wasm32-wasip1 through CMake's Swift support, linked against the Swift SDK's
+# runtime; SwiftCompilerSources stays off (SWIFT_ENABLE_SWIFT_IN_SWIFT=OFF), since
+# macros do not need the Swift-written optimizer passes. Without SWIFT_MACROS=1 the
+# build is exactly as before: SWIFT_BUILD_SWIFT_SYNTAX=OFF.
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
 : "${SWIFT_SRC:=${TC_SRC}/swift}"
@@ -66,6 +73,34 @@ STACK_SIZE=16777216
 [[ -f "${CMARK_INSTALL}/lib/cmake/cmark-gfm-config.cmake" ]] ||
   die "run 15-cmark-wasm.sh first"
 
+MACRO_ARGS=(-DSWIFT_BUILD_SWIFT_SYNTAX=OFF)
+if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
+  : "${SWIFT_SYNTAX_SRC:=${TC_SRC}/swift-syntax}"
+  : "${SWIFT_STRING_PROCESSING_SRC:=${TC_SRC}/swift-experimental-string-processing}"
+  [[ -d "$SWIFT_SYNTAX_SRC" && -d "$SWIFT_STRING_PROCESSING_SRC" ]] ||
+    die "macros need swift-syntax and swift-experimental-string-processing; run 00-fetch-sources.sh with SWIFT_MACROS=1"
+  [[ -x "${NATIVE_SWIFT_BIN}/swiftc" ]] || die "macros need a native swiftc at ${NATIVE_SWIFT_BIN}"
+  source "${TOOLCHAIN_ROOT}/scripts/wasm-sdk.sh"
+  fetch_wasm_sdk
+  SWIFT_HOST_SYSROOT="${TC_BUILD}/wasi-swift-host-sysroot"
+  make_swift_host_sysroot "$SWIFT_HOST_SYSROOT"
+  swift_flags="-sdk ${SWIFT_HOST_SYSROOT} -resource-dir ${WASM_SDK_BUNDLE}/swift.xctoolchain/usr/lib/swift_static"
+  for define in $WASI_EMULATION_DEFINES -fno-exceptions; do swift_flags+=" -Xcc ${define}"; done
+  log "macro support on: building ASTGen and the compiler's swift-syntax for ${WASM_TARGET}"
+  MACRO_ARGS=(
+    -DSWIFT_BUILD_SWIFT_SYNTAX=ON
+    -DSWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE="$SWIFT_SYNTAX_SRC"
+    -DSWIFT_PATH_TO_STRING_PROCESSING_SOURCE="$SWIFT_STRING_PROCESSING_SRC"
+    -DSWIFT_PATH_TO_SWIFT_SDK="${WASM_SDK_BUNDLE}/swift.xctoolchain/usr"
+    -DCMAKE_Swift_COMPILER="${NATIVE_SWIFT_BIN}/swiftc"
+    -DCMAKE_Swift_COMPILER_TARGET=wasm32-unknown-wasip1
+    # CMake's check links a Swift executable with the toolchain file's C++ flags, which
+    # are wasi-sdk's and not the Swift SDK's; the real links go through clang++.
+    -DCMAKE_Swift_COMPILER_WORKS=ON
+    -DCMAKE_Swift_FLAGS="$swift_flags"
+  )
+fi
+
 log "configuring swift-frontend for ${WASM_TARGET}"
 cmake -G Ninja -S "${SWIFT_SRC}" -B "$SWIFT_BUILD" \
   -DCMAKE_TOOLCHAIN_FILE="${WASI_SDK_PATH}/share/cmake/wasi-sdk-p1.cmake" \
@@ -91,7 +126,7 @@ cmake -G Ninja -S "${SWIFT_SRC}" -B "$SWIFT_BUILD" \
   -DSWIFT_BUILD_SOURCEKIT=OFF \
   -DSWIFT_INCLUDE_TESTS=OFF \
   -DSWIFT_INCLUDE_DOCS=OFF \
-  -DSWIFT_BUILD_SWIFT_SYNTAX=OFF \
+  "${MACRO_ARGS[@]}" \
   -DSWIFT_ENABLE_SWIFT_IN_SWIFT=OFF \
   -DBOOTSTRAPPING_MODE=OFF \
   -DSWIFT_USE_LINKER="" \

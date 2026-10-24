@@ -21,6 +21,13 @@ on:
         description: Publish artifacts as a GitHub release
         type: boolean
         default: false
+      macros:
+        description: >-
+          Build with macro support: ASTGen and swift-syntax in the frontend, macro
+          plugins as wasm (Stage 37), and the macro smoke test (Stage 57). Its build
+          trees are cached under their own keys, so the default build's are untouched.
+        type: boolean
+        default: false
       release_tag:
         description: >-
           Tag to publish under (default swift-<version>-wasm). A new tag, such as
@@ -32,7 +39,7 @@ on:
 
 concurrency:
   # Never two builds writing the same cache.
-  group: toolchain-${{ github.ref }}
+  group: toolchain-${{ github.ref }}${{ inputs.macros && '-macros' || '' }}
   cancel-in-progress: false
 
 env:
@@ -40,6 +47,11 @@ env:
   WASI_SDK_VERSION: "34.0"
   # Leave headroom under the 6h limit to save caches and upload artifacts.
   STAGE_TIMEOUT_MINUTES: "300"
+  SWIFT_MACROS: ${{ inputs.macros && '1' || '0' }}
+  # The build-tree cache key's prefix. A macros build must never restore into or
+  # save over the default build's keys, and the default's restore-keys prefix
+  # (build-<version>-) must not match a macros key, hence a different start.
+  BUILD_CACHE: ${{ inputs.macros && 'macros-build' || 'build' }}
 
 jobs:
   build:
@@ -92,6 +104,11 @@ jobs:
       # these must be saved even when the run fails, or a string of failing runs never
       # manages to cache them at all. That is exactly what happened here: every run
       # re-cloned LLVM and Swift and then rebuilt everything.
+      # The JavaScript plugin host needs nothing built, so it is tested first.
+      - name: Test the macro plugin host
+        if: env.SWIFT_MACROS == '1'
+        run: node --test tools/plugin-host/test/*.test.mjs
+
       - name: Restore sources
         uses: actions/cache/restore@v4
         with:
@@ -106,9 +123,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build
-          key: build-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-${{ github.run_id }}
+          key: ${{ env.BUILD_CACHE }}-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-${{ github.run_id }}
+          # A first macros build starts from the default build's trees: LLVM is the
+          # same, and only the Swift frontend has to be rebuilt.
           restore-keys: |
-            build-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-
+            ${{ env.BUILD_CACHE }}-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-
+            ${{ env.BUILD_CACHE }}-${{ env.SWIFT_VERSION }}-
             build-${{ env.SWIFT_VERSION }}-
 
       - name: Build
@@ -143,7 +163,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build
-          key: build-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-${{ github.run_id }}
+          key: ${{ env.BUILD_CACHE }}-${{ env.SWIFT_VERSION }}-${{ hashFiles('patches/**', 'scripts/**', 'env.sh') }}-${{ github.run_id }}
 
       - name: Smoke-test the toolchain
         if: steps.pipeline.outputs.complete == 'true'
@@ -173,6 +193,16 @@ jobs:
           [ "$missing" = 0 ] || exit 0
           ./scripts/53-sourcekit-lsp-lite-smoke-test.sh
 
+      # The macro toolchain is new: let a failure here still upload everything, then
+      # fail the job before anything is published.
+      - name: Smoke-test macros
+        id: macros-smoke
+        if: steps.pipeline.outputs.complete == 'true' && env.SWIFT_MACROS == '1'
+        continue-on-error: true
+        run: |
+          . "$HOME/.local/share/swiftly/env.sh"
+          ./scripts/57-macros-smoke-test.sh
+
       - name: Compress artifacts
         if: steps.pipeline.outputs.complete == 'true'
         run: |
@@ -188,18 +218,26 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: steps.pipeline.outputs.complete == 'true'
         with:
-          name: swift-toolchain-wasm-${{ env.SWIFT_VERSION }}
+          name: swift-toolchain-wasm-${{ env.SWIFT_VERSION }}${{ env.SWIFT_MACROS == '1' && '-macros' || '' }}
           path: out/
           retention-days: 30
 
       - name: Fail if the sourcekitd smoke test failed
-        if: steps.pipeline.outputs.complete == 'true' && steps.sourcekitd-smoke.outcome != 'success'
+        # A macros build treats SourceKit as optional (scripts/build-all.sh) for now.
+        if: steps.pipeline.outputs.complete == 'true' && env.SWIFT_MACROS != '1' && steps.sourcekitd-smoke.outcome != 'success'
         run: |
           echo "::error::sourcekitd-request.wasm did not answer completion and cursor info; see the 'Smoke-test sourcekitd' step."
           exit 1
 
+      - name: Fail if the macro smoke test failed
+        if: steps.pipeline.outputs.complete == 'true' && env.SWIFT_MACROS == '1' && steps.macros-smoke.outcome != 'success'
+        run: |
+          echo "::error::the macro smoke test failed; see the 'Smoke-test macros' step."
+          exit 1
+
+      # Never from a macros build until macro support is the default.
       - name: Publish release
-        if: steps.pipeline.outputs.complete == 'true' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release)
+        if: steps.pipeline.outputs.complete == 'true' && env.SWIFT_MACROS != '1' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release)
         uses: softprops/action-gh-release@v2
         with:
           # A workflow_dispatch run has no tag of its own, and the action refuses to
