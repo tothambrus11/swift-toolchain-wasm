@@ -95,7 +95,27 @@ if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
   mkdir -p "${shims_include}/swift"
   ln -sfn "${WASM_SDK_BUNDLE}/swift.xctoolchain/usr/lib/swift_static/shims" "${shims_include}/swift/shims"
   compiler_sources_flags="$(printf '%s;' $swift_flags -I "$shims_include")"
-  native_swiftc="$(command -v swiftc)" || die "macros need the native swiftc on PATH"
+  command -v swiftc >/dev/null || die "macros need the native swiftc on PATH"
+  # With SWIFT_ENABLE_SWIFT_IN_SWIFT, the build runs three of its own tools
+  # (swift-compatibility-symbols, swift-def-to-strings-converter,
+  # swift-serialize-diagnostics) from SWIFT_NATIVE_SWIFT_TOOLS_PATH to generate
+  # data files, and leaving it unset means build/bin, where they are wasm.
+  # Pointing it at the native toolchain fails because a release toolchain ships
+  # none of them (run 24: "swift-compatibility-symbols: not found"). The wasm
+  # builds of those tools are right here and produce the same files, so run them
+  # under wasmtime. (SwiftCompilerSources is still compiled by CMAKE_Swift_COMPILER
+  # in HOSTTOOLS mode; it does not use this directory's swiftc.)
+  command -v wasmtime >/dev/null || die "macros need wasmtime to run the build's own tools"
+  native_tools="${TC_BUILD}/wasi-build-tools"
+  mkdir -p "$native_tools"
+  for tool in swift-compatibility-symbols swift-def-to-strings-converter swift-serialize-diagnostics; do
+    # Every path the build passes them is absolute, so the host's root is enough.
+    cat > "${native_tools}/${tool}" <<WRAPPER
+#!/usr/bin/env bash
+exec wasmtime run --dir /::/ "${SWIFT_BUILD}/bin/${tool}" "\$@"
+WRAPPER
+    chmod +x "${native_tools}/${tool}"
+  done
   log "macro support on: building ASTGen and the compiler's swift-syntax for ${WASM_TARGET}"
   MACRO_ARGS=(
     -DSWIFT_BUILD_SWIFT_SYNTAX=ON
@@ -120,7 +140,7 @@ if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
     # triple, and it must be the very compiler CMake recorded.
     -DSWIFT_ENABLE_SWIFT_IN_SWIFT=ON
     -DBOOTSTRAPPING_MODE=HOSTTOOLS
-    -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$(dirname "$native_swiftc")"
+    -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$native_tools"
     -DSWIFT_COMPILER_SOURCES_SDK_FLAGS="${compiler_sources_flags%;}"
   )
 fi
