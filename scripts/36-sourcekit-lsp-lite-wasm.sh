@@ -98,14 +98,15 @@ frontend_link_command="$(ninja -C "$SWIFT_BUILD" -t commands -s bin/swift-fronte
 [[ "$frontend_link_command" == */driver.cpp.o* ]] ||
   die "could not find swift-frontend's link command in ${SWIFT_BUILD}: ${frontend_link_command:0:200}"
 
-# Rewrites sourcekitd-request's command: the server's objects instead of the
+# Rewrites sourcekitd-request's link: the server's objects instead of the
 # driver's, a new output, and for a reactor no main and -mexec-model=reactor.
 # Mode "combined" is a reactor that also takes every library and object of
 # swift-frontend's command (FRONTEND_LINK_COMMAND) that sourcekitd-request's
 # lacks, except its driver.cpp.o (main); flags only swift-frontend's command
-# has are printed, so a difference that matters can be seen. Refuses anything
-# it does not understand (a response file, a compound command) rather than
-# guessing.
+# has are printed, so a difference that matters can be seen. Of a compound
+# command only the link itself is kept (post-build copies are not ours to
+# run). Refuses anything it does not understand (a response file, two links
+# in one command) rather than guessing.
 relink() {
   local output="$1" mode="$2"
   shift 2
@@ -114,15 +115,15 @@ relink() {
 import os, shlex, subprocess, sys
 output, mode, objects = sys.argv[1], sys.argv[2], sys.argv[3:]
 
-def parse(command, name):
-    command = command.strip()
-    if command.startswith(": && "):
-        command = command[len(": && "):]
-    if command.endswith(" && :"):
-        command = command[: -len(" && :")]
-    if "&&" in command or ";" in command:
-        sys.exit(f"error: not a single link command: {command[:300]}")
-    args = shlex.split(command)
+def parse(command, name, marker):
+    # Ninja wraps a link in ": && ... && :", and CMake appends post-build
+    # steps with "&&" (swift-frontend's: the swiftc and swift-driver copies).
+    # The link is the one step that names the driver's object.
+    steps = [s.strip() for s in command.strip().split(" && ") if s.strip() not in ("", ":")]
+    links = [s for s in steps if marker in s]
+    if len(links) != 1 or ";" in links[0]:
+        sys.exit(f"error: no single link command for {name}: {command[:300]}")
+    args = shlex.split(links[0])
     if any(a.startswith("@") for a in args):
         sys.exit(f"error: the link uses a response file; relink {name} with "
                  "`ninja -d keeprsp` so it is kept, then run this stage again")
@@ -130,7 +131,7 @@ def parse(command, name):
         sys.exit(f"error: unexpected link command: {command[:300]}")
     return args
 
-args = parse(os.environ["LINK_COMMAND"], "sourcekitd-request")
+args = parse(os.environ["LINK_COMMAND"], "sourcekitd-request", "sourcekitd-request.cpp.o")
 driver = [i for i, a in enumerate(args) if a.endswith("sourcekitd-request.cpp.o")]
 if len(driver) != 1:
     sys.exit(f"error: unexpected link command: {shlex.join(args)[:300]}")
@@ -139,7 +140,7 @@ args[args.index("-o") + 1] = output
 if mode in ("reactor", "combined"):
     args.insert(1, "-mexec-model=reactor")
 if mode == "combined":
-    frontend = parse(os.environ["FRONTEND_LINK_COMMAND"], "swift-frontend")
+    frontend = parse(os.environ["FRONTEND_LINK_COMMAND"], "swift-frontend", "/driver.cpp.o")
     del frontend[frontend.index("-o"):frontend.index("-o") + 2]
     have = set(args)
     extra, flags_only_there = [], []
