@@ -92,13 +92,28 @@ if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
     -DSWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE="$SWIFT_SYNTAX_SRC"
     -DSWIFT_PATH_TO_STRING_PROCESSING_SOURCE="$SWIFT_STRING_PROCESSING_SRC"
     -DSWIFT_PATH_TO_SWIFT_SDK="${WASM_SDK_BUNDLE}/swift.xctoolchain/usr"
-    -DCMAKE_Swift_COMPILER="${NATIVE_SWIFT_BIN}/swiftc"
+    # No CMAKE_Swift_COMPILER: Swift's CMakeLists enables the Swift language in every
+    # configuration, so a build tree already records the swiftc it found on PATH
+    # (swiftly's proxy in CI), and naming a different path, even one to the same
+    # compiler, makes CMake delete the whole cache and reconfigure without the
+    # toolchain file. Run 20 failed exactly so. The swiftc on PATH must be the
+    # native ${SWIFT_VERSION} toolchain.
     -DCMAKE_Swift_COMPILER_TARGET=wasm32-unknown-wasip1
     # CMake's check links a Swift executable with the toolchain file's C++ flags, which
     # are wasi-sdk's and not the Swift SDK's; the real links go through clang++.
     -DCMAKE_Swift_COMPILER_WORKS=ON
     -DCMAKE_Swift_FLAGS="$swift_flags"
   )
+fi
+
+# A cache CMake wiped and half-reconfigured for the build machine (it does that when a
+# compiler path changes) has no toolchain file, and reconfiguring on top of it keeps
+# the host compilers. Start the configuration over; the objects stay, and ninja
+# rebuilds only what the new commands change.
+if [[ -f "${SWIFT_BUILD}/CMakeCache.txt" ]] &&
+   ! grep -q '^CMAKE_TOOLCHAIN_FILE:' "${SWIFT_BUILD}/CMakeCache.txt"; then
+  warn "${SWIFT_BUILD}/CMakeCache.txt has no toolchain file; configuring from scratch"
+  rm -rf "${SWIFT_BUILD}/CMakeCache.txt" "${SWIFT_BUILD}/CMakeFiles"
 fi
 
 log "configuring swift-frontend for ${WASM_TARGET}"

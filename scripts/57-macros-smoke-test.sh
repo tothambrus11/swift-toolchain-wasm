@@ -93,7 +93,9 @@ SWIFT
 
 compile() {
   local source="$1" object="$2"
-  node "$RUN_FRONTEND" "${MOUNTS[@]}" "${TC_OUT}/swift-frontend.wasm" \
+  # Node 22's node:wasi answers some calls through V8 fast API calls that can
+  # crash in a garbage collection (see Stage 53); the slow path is correct.
+  node --no-turbo-fast-api-calls "$RUN_FRONTEND" "${MOUNTS[@]}" "${TC_OUT}/swift-frontend.wasm" \
     -frontend -c -primary-file "/work/src/${source}" \
     -target wasm32-unknown-wasip1 -disable-objc-interop \
     -sdk /sysroot/wasi-sysroot \
