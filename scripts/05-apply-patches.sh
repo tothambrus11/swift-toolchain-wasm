@@ -16,9 +16,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
 apply_series() {
   local name="$1" repo="$2"
-  local dir="${TOOLCHAIN_ROOT}/patches/${name}"
+  shift 2
   shopt -s nullglob
-  local patches=("${dir}"/*.patch)
+  # The series is patches/<name>, then any further directories named, in order.
+  local dir patches=()
+  for dir in "${TOOLCHAIN_ROOT}/patches/${name}" "$@"; do
+    patches+=("${dir}"/*.patch)
+  done
   [[ ${#patches[@]} -gt 0 ]] || { log "no ${name} patches"; return 0; }
   [[ -d "${repo}/.git" ]] || { warn "skipping ${name}: ${repo} is not a checkout"; return 0; }
 
@@ -90,4 +94,11 @@ apply_series() {
 }
 
 apply_series llvm "$LLVM_SRC"
-apply_series swift "${TC_SRC}/swift"
+# Macro support builds SwiftCompilerSources, which needs patches/swift-macros on
+# top. They stay out of the default build until macros are the default, because
+# they change headers the whole compiler includes, and so would rebuild it.
+if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
+  apply_series swift "${TC_SRC}/swift" "${TOOLCHAIN_ROOT}/patches/swift-macros"
+else
+  apply_series swift "${TC_SRC}/swift"
+fi

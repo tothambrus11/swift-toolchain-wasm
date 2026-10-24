@@ -144,6 +144,19 @@ did not come up at compile time: ASTGen, MacroEvaluation and swift-syntax compil
 since `SWIFT_ENABLE_SWIFT_IN_SWIFT` stays off and with it `BridgedSwiftObject`, the one
 32-bit fix [swift#90326] made on the Swift side.
 
+**`patches/swift-macros/0001-swift-compiler-sources-32-bit.patch`** — applied only with
+`SWIFT_MACROS=1`, because it changes `BridgedSwiftObject.h`, which nearly every file of the
+compiler includes. A macro build also builds SwiftCompilerSources (swift-testing's `@Test`
+expands to `@section` globals, and only the Swift-written `InitializeStaticGlobals` pass
+makes them constant), and SwiftCompilerSources on wasm32 needs three hunks of [swift#90326],
+copied unchanged: the bridged object header's `refCounts` is pointer-sized like the
+runtime's inline refcount (32 bits on wasm32), and one test literal does not fit a 32-bit
+`Int`. Upstream: fixed on `main` by that PR.
+
+`0003` also teaches `SwiftCompilerSources/CMakeLists.txt` that a WASI host takes the SDK
+flags it is given and no `-I` into the native toolchain, whose SwiftShims module would be
+a second definition of the Swift SDK's.
+
 What is not a patch but matters as much: the compiler's Swift code imports its C++
 headers, and has to parse them with the clang inside the native `swiftc` (21.0). wasi-sdk
 34's libc++ (23) needs clang 21.1 and does not build as a Clang module there; the Swift

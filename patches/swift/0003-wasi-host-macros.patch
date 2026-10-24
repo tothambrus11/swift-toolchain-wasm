@@ -26,11 +26,28 @@ index 960104c..2b84a05 100644
    # Only "HOSTTOOLS" is supported in Linux when Swift parser integration is enabled.
    if(SWIFT_HOST_VARIANT_SDK MATCHES "LINUX|OPENBSD|FREEBSD" AND NOT BOOTSTRAPPING_MODE STREQUAL "HOSTTOOLS")
      message(WARNING "Force setting BOOTSTRAPPING=HOSTTOOLS because Swift parser integration is enabled")
+diff --git a/SwiftCompilerSources/CMakeLists.txt b/SwiftCompilerSources/CMakeLists.txt
+index d0ec770..d452f6c 100644
+--- a/SwiftCompilerSources/CMakeLists.txt
++++ b/SwiftCompilerSources/CMakeLists.txt
+@@ -207,6 +207,12 @@ function(add_swift_compiler_modules_library name)
+     # Workaround for https://github.com/swiftlang/llvm-project/issues/7172
+     list(APPEND swift_compile_options "-Xcc" "-Xclang" "-Xcc" "-fmodule-format=raw")
+ 
++  elseif(SWIFT_HOST_VARIANT_SDK STREQUAL "WASI")
++    # A WASI host compiles these modules against the Swift SDK for WebAssembly,
++    # whose resource directory (in SWIFT_COMPILER_SOURCES_SDK_FLAGS) has the
++    # SwiftShims module. The native toolchain's lib directory has another, and
++    # adding it makes clang see each shim module twice. The flags name a
++    # directory where "swift/shims/..." is the resource directory's shims.
+   elseif(swift_exec_bin_dir MATCHES ".*/swiftly/bin")
+     # Detect and handle swiftly-managed hosts.
+     execute_process(COMMAND swiftly use --print-location
 diff --git a/cmake/modules/AddSwift.cmake b/cmake/modules/AddSwift.cmake
-index 289716e..611f08f 100644
+index 289716e..94db69e 100644
 --- a/cmake/modules/AddSwift.cmake
 +++ b/cmake/modules/AddSwift.cmake
-@@ -601,6 +601,29 @@ function(_add_swift_runtime_link_flags target relpath_to_lib_dir bootstrapping)
+@@ -601,6 +601,32 @@ function(_add_swift_runtime_link_flags target relpath_to_lib_dir bootstrapping)
      else()
        message(FATAL_ERROR "Unknown BOOTSTRAPPING_MODE '${ASRLF_BOOTSTRAPPING_MODE}'")
      endif()
@@ -41,8 +58,9 @@ index 289716e..611f08f 100644
 +    # and so no rpath. The C++ linker does not read the autolink entries in
 +    # Swift objects, so the libraries the compiler's Swift code needs are
 +    # named here, as swift-autolink-extract lists them for ASTGen, MacroEvaluation
-+    # and the compiler's swift-syntax: the runtime, Concurrency (imported
-+    # implicitly by every Swift module), the WASILibc overlay that swift-syntax
++    # and the compiler's swift-syntax: the runtime, Concurrency and
++    # StringProcessing (imported implicitly by every Swift module that does
++    # not opt out, as SwiftCompilerSources does not), the WASILibc overlay that swift-syntax
 +    # imports, and Cxx, which ASTGen's C++ interoperability uses. wasm-ld
 +    # resolves archives in any order, so the order here does not matter.
 +    if(NOT SWIFT_PATH_TO_SWIFT_SDK)
@@ -55,6 +73,8 @@ index 289716e..611f08f 100644
 +      "${host_lib_dir}/${SWIFT_HOST_VARIANT_ARCH}/swiftrt${CMAKE_C_OUTPUT_EXTENSION}"
 +      "${host_lib_dir}/libswiftCore.a"
 +      "${host_lib_dir}/libswift_Concurrency.a"
++      "${host_lib_dir}/libswift_StringProcessing.a"
++      "${host_lib_dir}/libswift_RegexParser.a"
 +      "${host_lib_dir}/libswiftWASILibc.a"
 +      "${SWIFT_PATH_TO_SWIFT_SDK}/lib/swift/wasi/libswiftCxx.a")
    else()

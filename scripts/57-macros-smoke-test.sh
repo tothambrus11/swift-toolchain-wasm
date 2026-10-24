@@ -171,3 +171,15 @@ expect_line "Test run with 2 tests"
 expect_line "tests exited with 0"
 
 log "macro smoke test passed: #stringify, @Observable, @Test and #expect expanded by wasm plugins"
+
+# What macro support costs a browser to download: the plugin bundle, and the
+# runtime libraries @Observable and @Test link (the frontend's own size is in
+# the build log; compare it with a default build's).
+log "download sizes (bytes: raw, gzip -9, brotli -q 11)"
+for file in "${TC_OUT}/swift-frontend.wasm" "${TC_OUT}/SwiftMacroPlugins.wasm" \
+            "${STATIC_LIBS}/libTesting.a" "${STATIC_LIBS}/libswiftObservation.a"; do
+  br="n/a"
+  command -v brotli >/dev/null && br="$(brotli -c -q 11 "$file" | wc -c)"
+  printf '  %-28s %11d %11d %11s\n' "$(basename "$file")" \
+    "$(stat -c %s "$file")" "$(gzip -9c "$file" | wc -c)" "$br"
+done

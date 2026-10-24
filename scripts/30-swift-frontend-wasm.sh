@@ -32,9 +32,10 @@
 # sends the in-process plugin channel to the embedder (tools/plugin-host), which runs
 # plugins that are themselves wasm (Stage 37). The Swift code is compiled by the native
 # swiftc for wasm32-wasip1 through CMake's Swift support, linked against the Swift SDK's
-# runtime; SwiftCompilerSources stays off (SWIFT_ENABLE_SWIFT_IN_SWIFT=OFF), since
-# macros do not need the Swift-written optimizer passes. Without SWIFT_MACROS=1 the
-# build is exactly as before: SWIFT_BUILD_SWIFT_SYNTAX=OFF.
+# runtime. SwiftCompilerSources is built the same way (SWIFT_ENABLE_SWIFT_IN_SWIFT=ON,
+# HOSTTOOLS): swift-testing's macros need its InitializeStaticGlobals pass, and it
+# brings back the Swift-written optimizer passes. Patch 0002 is what fixed the interop
+# cycle described above. Without SWIFT_MACROS=1 the build is exactly as before: both off.
 source "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
 : "${SWIFT_SRC:=${TC_SRC}/swift}"
@@ -73,7 +74,7 @@ STACK_SIZE=16777216
 [[ -f "${CMARK_INSTALL}/lib/cmake/cmark-gfm-config.cmake" ]] ||
   die "run 15-cmark-wasm.sh first"
 
-MACRO_ARGS=(-DSWIFT_BUILD_SWIFT_SYNTAX=OFF)
+MACRO_ARGS=(-DSWIFT_BUILD_SWIFT_SYNTAX=OFF -DSWIFT_ENABLE_SWIFT_IN_SWIFT=OFF -DBOOTSTRAPPING_MODE=OFF)
 if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
   : "${SWIFT_SYNTAX_SRC:=${TC_SRC}/swift-syntax}"
   : "${SWIFT_STRING_PROCESSING_SRC:=${TC_SRC}/swift-experimental-string-processing}"
@@ -86,6 +87,15 @@ if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
   make_swift_host_sysroot "$SWIFT_HOST_SYSROOT"
   swift_flags="-sdk ${SWIFT_HOST_SYSROOT} -resource-dir ${WASM_SDK_BUNDLE}/swift.xctoolchain/usr/lib/swift_static"
   for define in $WASI_EMULATION_DEFINES -fno-exceptions; do swift_flags+=" -Xcc ${define}"; done
+  # SwiftCompilerSources passes its SDK flags as a list, and needs one thing more:
+  # its C++ headers include the runtime's "swift/shims/...", which must resolve to
+  # the resource directory's own shims. Any other copy (the native toolchain's,
+  # the source tree's) is a second definition of the SwiftShims module.
+  shims_include="${SWIFT_HOST_SYSROOT}/swift-shims"
+  mkdir -p "${shims_include}/swift"
+  ln -sfn "${WASM_SDK_BUNDLE}/swift.xctoolchain/usr/lib/swift_static/shims" "${shims_include}/swift/shims"
+  compiler_sources_flags="$(printf '%s;' $swift_flags -I "$shims_include")"
+  native_swiftc="$(command -v swiftc)" || die "macros need the native swiftc on PATH"
   log "macro support on: building ASTGen and the compiler's swift-syntax for ${WASM_TARGET}"
   MACRO_ARGS=(
     -DSWIFT_BUILD_SWIFT_SYNTAX=ON
@@ -103,6 +113,15 @@ if [[ "${SWIFT_MACROS:-0}" == "1" ]]; then
     # are wasi-sdk's and not the Swift SDK's; the real links go through clang++.
     -DCMAKE_Swift_COMPILER_WORKS=ON
     -DCMAKE_Swift_FLAGS="$swift_flags"
+    # SwiftCompilerSources too: @Test's records are @section globals, and only the
+    # Swift-written InitializeStaticGlobals pass gives a global the static
+    # initializer @section requires ("global variable must be a compile-time
+    # constant", run 23). HOSTTOOLS: the native swiftc compiles it for the WASI
+    # triple, and it must be the very compiler CMake recorded.
+    -DSWIFT_ENABLE_SWIFT_IN_SWIFT=ON
+    -DBOOTSTRAPPING_MODE=HOSTTOOLS
+    -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$(dirname "$native_swiftc")"
+    -DSWIFT_COMPILER_SOURCES_SDK_FLAGS="${compiler_sources_flags%;}"
   )
 fi
 
@@ -142,8 +161,6 @@ cmake -G Ninja -S "${SWIFT_SRC}" -B "$SWIFT_BUILD" \
   -DSWIFT_INCLUDE_TESTS=OFF \
   -DSWIFT_INCLUDE_DOCS=OFF \
   "${MACRO_ARGS[@]}" \
-  -DSWIFT_ENABLE_SWIFT_IN_SWIFT=OFF \
-  -DBOOTSTRAPPING_MODE=OFF \
   -DSWIFT_USE_LINKER="" \
   -DSWIFT_NATIVE_CLANG_TOOLS_PATH="${NATIVE_SWIFT_BIN}" \
   -DCMAKE_CXX_FLAGS="${WASI_EMULATION_DEFINES} -fno-exceptions" \

@@ -1,0 +1,54 @@
+Applied only with SWIFT_MACROS=1 (scripts/05-apply-patches.sh), until macro
+support is the default: the header change rebuilds most of the compiler.
+
+The 32-bit fixes SwiftCompilerSources needs, taken unchanged from swift#90326
+(merged to main, absent from release/6.3):
+
+* BridgedSwiftObject.h, SwiftObjectHeader.h: the bridged object header's
+  refCounts is pointer-sized, as the runtime's inline refcount is (uint32_t on
+  32-bit hosts, RefCount.h), so the Swift and C++ views of a bridged object
+  agree on wasm32.
+* SmallProjectionPath.swift: a test literal that does not fit a 32-bit Int.
+
+diff --git a/SwiftCompilerSources/Sources/SIL/Utilities/SmallProjectionPath.swift b/SwiftCompilerSources/Sources/SIL/Utilities/SmallProjectionPath.swift
+index 0020e56..6834c76 100644
+--- a/SwiftCompilerSources/Sources/SIL/Utilities/SmallProjectionPath.swift
++++ b/SwiftCompilerSources/Sources/SIL/Utilities/SmallProjectionPath.swift
+@@ -975,9 +975,9 @@ let smallProjectionPathTest = Test("small_projection_path") {
+     let (k2, _, s2) = p2.pop()
+     assert(k2 == .anything && s2.isEmpty)
+ 
+-    let p3 = SmallProjectionPath(.indexedElement, index: 0xfffffffffffff)
++    let p3 = SmallProjectionPath(.indexedElement, index: Int.max >> 12)
+     let (k3, i3, s3) = p3.pop()
+-    assert(k3 == .indexedElement && i3 == 0xfffffffffffff && s3.isEmpty)
++    assert(k3 == .indexedElement && i3 == Int.max >> 12 && s3.isEmpty)
+ 
+     let p4 = p3.push(.indexedElement, index: Int.max)
+     let (k4, _, s4) = p4.pop()
+diff --git a/include/swift/Basic/BridgedSwiftObject.h b/include/swift/Basic/BridgedSwiftObject.h
+index e796134..1e17908 100644
+--- a/include/swift/Basic/BridgedSwiftObject.h
++++ b/include/swift/Basic/BridgedSwiftObject.h
+@@ -40,7 +40,7 @@ typedef const void * _Nonnull SwiftMetatype;
+ /// It must be layout compatible with the Swift object header.
+ struct BridgedSwiftObject {
+   SwiftMetatype metatype;
+-  int64_t refCounts;
++  intptr_t refCounts;
+ };
+ 
+ typedef struct BridgedSwiftObject * _Nonnull SwiftObject;
+diff --git a/include/swift/Basic/SwiftObjectHeader.h b/include/swift/Basic/SwiftObjectHeader.h
+index 8e6361a..943f6a6 100644
+--- a/include/swift/Basic/SwiftObjectHeader.h
++++ b/include/swift/Basic/SwiftObjectHeader.h
+@@ -25,7 +25,7 @@
+ struct SwiftObjectHeader : BridgedSwiftObject {
+   SwiftObjectHeader(SwiftMetatype metatype) {
+     this->metatype = metatype;
+-    this->refCounts = ~(uint64_t)0;
++    this->refCounts = ~(uintptr_t)0;
+   }
+ 
+   bool isBridged() const { return metatype != nullptr; }
